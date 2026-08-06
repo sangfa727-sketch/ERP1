@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useRouter } from 'next/navigation'
 import { useI18n } from '@/lib/i18n'
 
@@ -14,13 +15,14 @@ export default function ReceiptPage() {
   const [receipt, setReceipt] = useState<ReceiptData | null>(null)
   const [printSize, setPrintSize] = useState('receipt')
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   useEffect(() => {
     const data = localStorage.getItem('pos_last_receipt')
     if (data) setReceipt(JSON.parse(data))
     const size = localStorage.getItem('print_size') || 'receipt'
     setPrintSize(size)
-  }, [])
+  }, [searchParams])
 
   if (!receipt) {
     return (
@@ -61,7 +63,7 @@ export default function ReceiptPage() {
             {receipt.companyAddress && <p className="text-center text-xs mb-1">{receipt.companyAddress}</p>}
             {receipt.companyPhone && <p className="text-center text-xs mb-1">Ph: {receipt.companyPhone}</p>}
             <p className="text-center text-xs mb-4">{receipt.createdAtMs ? new Date(receipt.createdAtMs).toLocaleString() : new Date().toLocaleString()}</p>
-            <p className="text-xs mb-1">Receipt#: {receipt.transactionId?.slice(0, 8)}</p>
+            <p className="text-xs mb-1">Receipt#: {receipt.transactionId}</p>
             {receipt.customerName && <p className="text-xs mb-2">Customer: {receipt.customerName}</p>}
             <div className="border-t border-dashed border-gray-400 my-2" />
             <div className="flex justify-between text-xs font-bold mb-1">
@@ -109,7 +111,7 @@ export default function ReceiptPage() {
               </div>
               <div className="text-right">
                 <h2 className="text-2xl font-bold text-blue-600">INVOICE</h2>
-                <p className="text-gray-500 text-sm mt-1">#{receipt.transactionId?.slice(0, 8).toUpperCase()}</p>
+                <p className="text-gray-500 text-sm mt-1">#{receipt.transactionId}</p>
                 <p className="text-gray-500 text-sm">{receipt.createdAtMs ? new Date(receipt.createdAtMs).toLocaleDateString() : new Date().toLocaleDateString()}</p>
               </div>
             </div>

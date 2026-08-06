@@ -1,10 +1,50 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { useI18n } from '@/lib/i18n'
 
 export default function LoginPage() {
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', 'light')
+    document.documentElement.style.colorScheme = 'light'
+    document.body.classList.add('auth-page')
+    document.body.style.backgroundColor = '#f8fafc'
+    document.body.style.color = '#0f172a'
+    return () => {
+      document.body.classList.remove('auth-page')
+    }
+  }, [])
+
+  useEffect(() => {
+    // If already logged in, redirect to dashboard
+    const checkSession = async () => {
+      const staffSession = localStorage.getItem('staff_session')
+      if (staffSession) {
+        try {
+          const sess = JSON.parse(staffSession)
+          if (sess.expiresAt && Date.now() < sess.expiresAt) {
+            localStorage.setItem('last_login_time', Date.now().toString()); window.location.replace('/dashboard')
+            return
+          }
+        } catch {}
+        localStorage.removeItem('staff_session')
+        document.cookie = 'staff_session=; path=/; max-age=0'
+      }
+      // Check Supabase session - only auto-redirect if recently logged in
+      const lastLoginTime = localStorage.getItem('last_login_time')
+      const recentLogin = lastLoginTime && (Date.now() - parseInt(lastLoginTime)) < 10000
+      if (recentLogin) {
+        const { createClient } = await import('@/lib/supabase')
+        const supabase = createClient()
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session) {
+          window.location.replace('/dashboard')
+        }
+      }
+    }
+    checkSession()
+  }, [])
   const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -21,7 +61,7 @@ export default function LoginPage() {
       setError(t.login_error)
       setLoading(false)
     } else {
-      router.push('/dashboard')
+      localStorage.removeItem('pin_lock_active'); localStorage.setItem('last_login_time', Date.now().toString()); router.push('/dashboard')
     }
   }
 
@@ -141,7 +181,7 @@ export default function LoginPage() {
         </div>
         <div style={{marginTop:'1rem', textAlign:'center'}}>
           <span style={{fontSize:'0.8rem', color:'#64748b'}}>Account မရှိသေးဘူးလား? </span>
-          <a href="/signup" style={{fontSize:'0.8rem', color:'#2563eb', fontWeight:'600', textDecoration:'none'}}>
+          <a href="/signup" onClick={(e:any)=>{e.preventDefault();window.location.replace("/signup")}} style={{fontSize:'0.8rem', color:'#2563eb', fontWeight:'600', textDecoration:'none'}}>
             Sign Up →
           </a>
         </div>

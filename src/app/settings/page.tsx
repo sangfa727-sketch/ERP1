@@ -1,10 +1,12 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { toEnglishNumber } from '@/lib/utils'
 import AppLayout from '@/components/layout/AppLayout'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import { useI18n } from '@/lib/i18n'
+import { getCompanyId } from '@/lib/getCompanyId'
 
 const ALL_PAGES = [
   { key: 'dashboard', label: '📊 Dashboard' },
@@ -18,6 +20,12 @@ const ALL_PAGES = [
   { key: 'shipments', label: '🚚 Shipments' },
   { key: 'expenses', label: '💸 Expenses' },
   { key: 'reports', label: '📈 Reports' },
+  { key: 'sales_return', label: '↩️ Sales Return' },
+  { key: 'damaged_stock', label: '🗑️ Damaged Stock' },
+  { key: 'ar', label: '📨 Receivables (AR)' },
+  { key: 'ap', label: '📤 Payables (AP)' },
+  { key: 'bank_accounts', label: '🏦 Bank Accounts' },
+  { key: 'employees', label: '👥 Employees' },
   { key: 'settings', label: '⚙️ Settings' },
 ]
 
@@ -25,40 +33,48 @@ export default function SettingsPage() {
   const { t } = useI18n()
   const [appTheme, setAppTheme] = useState<{mode:string;primaryColor:string;fontSize:string}>({mode:'light',primaryColor:'blue',fontSize:'medium'})
   const [appearanceMsg, setAppearanceMsg] = useState('')
-
-  const applyTheme = (th: {mode:string;primaryColor:string;fontSize:string}) => {
-    const colors: Record<string,string> = {blue:'#2563eb',green:'#16a34a',purple:'#9333ea',orange:'#f97316',red:'#dc2626',teal:'#0d9488'}
-    const fonts: Record<string,string> = {small:'13px',medium:'15px',large:'17px'}
-    const themes: Record<string,any> = {
-      light:{bg:'#f9fafb',card:'#ffffff',text:'#111827',border:'#e5e7eb',sidebar:'#111827'},
-      dark:{bg:'#1f2937',card:'#374151',text:'#f9fafb',border:'#4b5563',sidebar:'#030712'},
-      classic:{bg:'#f5f0e8',card:'#fefcf8',text:'#2c1a0e',border:'#d4b896',sidebar:'#3d2b1f'},
-    }
-    const sv: Record<string,Record<string,string>> = {
-      light:{'--sidebar-text':'#000000','--sidebar-hover-bg':'#F1F5F9','--sidebar-hover-text':'#0F172A','--sidebar-active-bg':'#0D9488','--sidebar-active-text':'#FFFFFF','--sidebar-border':'#CBD5E1','--sidebar-group-text':'#374151','--sidebar-title':'#000000','--sidebar-icon':'#374151'},
-      dark:{'--sidebar-text':'#CBD5E1','--sidebar-hover-bg':'#1f2937','--sidebar-hover-text':'#FFFFFF','--sidebar-active-bg':'#0D9488','--sidebar-active-text':'#FFFFFF','--sidebar-border':'#374151','--sidebar-group-text':'#6B7280','--sidebar-title':'#FFFFFF','--sidebar-icon':'#9CA3AF'},
-      classic:{'--sidebar-text':'#e8d5c4','--sidebar-hover-bg':'#5c4033','--sidebar-hover-text':'#fefcf8','--sidebar-active-bg':'#8b4513','--sidebar-active-text':'#FFFFFF','--sidebar-border':'#5c4033','--sidebar-group-text':'#a0836e','--sidebar-title':'#fefcf8','--sidebar-icon':'#a0836e'},
-    }
-    const themeVars = themes[th.mode]
-    const root = document.documentElement
-    root.style.setProperty('--color-primary', colors[th.primaryColor])
-    root.style.setProperty('--color-bg', themeVars.bg)
-    root.style.setProperty('--color-card', themeVars.card)
-    root.style.setProperty('--color-text', themeVars.text)
-    root.style.setProperty('--color-border', themeVars.border)
-    root.style.setProperty('--color-sidebar', themeVars.sidebar)
-    Object.entries(sv[th.mode]||sv.light).forEach(([k,v])=>root.style.setProperty(k,v))
-    document.body.style.fontSize = fonts[th.fontSize]
-    document.body.style.backgroundColor = themeVars.bg
-    document.body.style.color = themeVars.text
-    document.documentElement.setAttribute('data-theme', th.mode)
-    window.dispatchEvent(new Event('theme-updated'))
-  }
   const [hiddenMenus, setHiddenMenus] = useState<string[]>([])
   const [menuControlMsg, setMenuControlMsg] = useState('')
-  const [tab, setTab] = useState('company')
+  const [tab, setTab] = useState<string | null>(null)
+  const [showLogout, setShowLogout] = useState(false)
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleting, setDeleting] = useState(false)
+
+  const handleLogout = async () => {
+    const staffSession = localStorage.getItem('staff_session')
+    if (staffSession) {
+      localStorage.removeItem('staff_session')
+      document.cookie = 'staff_session=; path=/; max-age=0'
+      window.location.replace('/staff-login')
+    } else {
+      const { createClient: cc } = await import('@/lib/supabase')
+      await cc().auth.signOut()
+      window.location.replace('/login')
+    }
+  }
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText !== 'DELETE') return
+    setDeleting(true)
+    try {
+      // Single secure RPC call - deletes everything including auth.users
+      const { error } = await supabase.rpc('fn_delete_own_account')
+      if (error) {
+        setMsg('❌ ' + error.message)
+        setDeleting(false)
+        return
+      }
+      // Clear local storage
+      localStorage.clear()
+      document.cookie = 'staff_session=; path=/; max-age=0'
+      window.location.replace('/login')
+    } catch (e: any) {
+      setMsg('❌ ' + e.message)
+      setDeleting(false)
+    }
+  }
   const [msg, setMsg] = useState('')
-  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const supabase = createClient()
   const [confirmState, setConfirmState] = useState<{open:boolean;msg:string;cb:()=>void}>({open:false,msg:'',cb:()=>{}})
   const showConfirm = (msg: string, cb: ()=>void) => setConfirmState({open:true,msg,cb})
@@ -100,9 +116,9 @@ export default function SettingsPage() {
 
   const savePrinter = async () => {
     setPrinterSaving(true); setPrinterMsg('')
-    const { data: comp } = await supabase.from('profiles').select('company_id').maybeSingle()
+    const rcptCompId = await getCompanyId()
     const payload = {
-      company_id: comp?.company_id, printer_type: printer.printer_type,
+      company_id: rcptCompId, printer_type: printer.printer_type,
       network_ip: printer.network_ip || null, network_port: printer.network_port || 9100,
       paper_width: printer.paper_width || 80, auto_print: printer.auto_print || false,
       updated_at: new Date().toISOString(),
@@ -120,32 +136,35 @@ export default function SettingsPage() {
   }
 
   const fetchAll = async () => {
-    // Get current user company_id first
-    const staffSession = localStorage.getItem('staff_session')
-    let companyId: string | null = null
-    if (staffSession) {
-      try {
-        const sess = JSON.parse(staffSession)
-        const { data: prof } = await supabase.from('profiles').select('company_id').eq('id', sess.id).maybeSingle()
-        companyId = prof?.company_id
-      } catch {}
-    } else {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        const { data: prof } = await supabase.from('profiles').select('company_id').eq('auth_user_id', user.id).maybeSingle()
-        companyId = prof?.company_id
-      }
+    const cid = await getCompanyId()
+    if (!cid) { console.warn('No company_id found'); return }
+    const supabaseClient = createClient()
+    const [compRes, usrsRes, uomRes, rolesRes, printerRes, rcptRes] = await Promise.all([
+      supabaseClient.from('companies').select('*').eq('id', cid).maybeSingle(),
+      supabaseClient.from('profiles').select('id,full_name,role,role_id,permissions,auth_user_id,is_active,company_id').eq('company_id', cid).eq('is_deleted', false).order('full_name'),
+      supabaseClient.from('uom').select('*').order('name'),
+      supabaseClient.from('roles').select('*').eq('company_id', cid).order('name'),
+      supabaseClient.from('printer_settings').select('*').eq('company_id', cid).maybeSingle(),
+      supabaseClient.from('receipt_settings').select('*').eq('company_id', cid).maybeSingle(),
+    ])
+    setCompany(compRes.data)
+    setUsers(usrsRes.data || [])
+    setUoms(uomRes.data || [])
+    setRoles(rolesRes.data || [])
+    if (printerRes.data) setPrinter(printerRes.data)
+    if (rcptRes.data) {
+      const r = rcptRes.data
+      setReceipt(prev => ({
+        ...prev,
+        ...(r.header !== undefined && { header: r.header }),
+        ...(r.footer !== undefined && { footer: r.footer }),
+        ...(r.show_logo !== undefined && { show_logo: r.show_logo }),
+        ...(r.shop_name !== undefined && { shop_name: r.shop_name }),
+        ...(r.shop_address !== undefined && { shop_address: r.shop_address }),
+        ...(r.shop_phone !== undefined && { shop_phone: r.shop_phone }),
+        ...(r.footer_text !== undefined && { footer_text: r.footer_text }),
+      } as any))
     }
-    if (!companyId) return
-
-    const { data: comp } = await supabase.from('companies').select('*').eq('id', companyId).maybeSingle()
-    setCompany(comp)
-    const { data: usrs } = await supabase.from('profiles').select('*').eq('company_id', companyId).order('full_name')
-    setUsers(usrs || [])
-    const { data: uomData } = await supabase.from('uom').select('*').eq('company_id', companyId).order('name')
-    setUoms(uomData || [])
-    const { data: rolesData } = await supabase.from('roles').select('*').eq('company_id', companyId).order('name')
-    setRoles(rolesData || [])
   }
   useEffect(() => { fetchAll() }, [])
   useEffect(() => {
@@ -194,11 +213,11 @@ export default function SettingsPage() {
       }).eq('id', u.id)
     } else {
       const { data: { user } } = await supabase.auth.getUser()
-      const { data: comp } = await supabase.from('profiles').select('company_id').eq('auth_user_id', user?.id || '').maybeSingle()
-      const companyId = comp?.company_id || '38e7b287-fd4e-4354-a1d1-9efae0b09eb9'
+      const companyId = await getCompanyId()
+      if (!companyId) { setUserSaving(false); return }
       await supabase.from('profiles').insert({
         company_id: companyId, full_name: u.full_name, role: u.role,
-        role_id: u.role_id || null, login_pin: u.login_pin || '0000',
+        role_id: u.role_id || null,
         permissions: u.role === 'Admin' ? null : (u.permissions || []),
         auth_user_id: 'staff-' + Date.now() + '-' + Math.random().toString(36).slice(2),
       })
@@ -218,8 +237,8 @@ export default function SettingsPage() {
     if (r.id) {
       await supabase.from('roles').update({ name: r.name, permissions: r.permissions }).eq('id', r.id)
     } else {
-      const { data: comp } = await supabase.from('profiles').select('company_id').maybeSingle()
-      await supabase.from('roles').insert({ company_id: comp?.company_id, name: r.name, permissions: r.permissions })
+      const roleCompId = await getCompanyId()
+      await supabase.from('roles').insert({ company_id: roleCompId, name: r.name, permissions: r.permissions })
     }
     setRoleModal(null); await fetchAll(); setRoleSaving(false)
   }
@@ -249,8 +268,8 @@ export default function SettingsPage() {
     setUomMsg('')
     if (!newUom.trim()) { setUomMsg(t.uom_err_empty); return }
     if (uoms.find(u => u.name === newUom.trim())) { setUomMsg(t.uom_err_exists); return }
-    const { data: comp } = await supabase.from('profiles').select('company_id').maybeSingle()
-    await supabase.from('uom').insert({ company_id: comp?.company_id, name: newUom.trim() })
+    const rcptCompId = await getCompanyId()
+    await supabase.from('uom').insert({ company_id: rcptCompId, name: newUom.trim() })
     setNewUom(''); await fetchAll()
   }
 
@@ -261,380 +280,468 @@ export default function SettingsPage() {
   }
 
   const setDefaultUom = async (id: string) => {
-    // Optimistic update - UI ချက်ချင်းပြောင်း
-    setUoms(prev => prev.map(u => ({ ...u, is_default: u.id === id })))
-    // DB update background မှာ
     await supabase.from('uom').update({ is_default: false }).neq('id', id)
     await supabase.from('uom').update({ is_default: true }).eq('id', id)
+    await fetchAll()
   }
 
   return (
     <AppLayout>
-      <div className="p-6 max-w-4xl mx-auto">
+      <div className="p-6 max-w-5xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold" style={{color:'var(--color-text)'}}>{t.settings_title}</h1>
-          <button onClick={()=>setShowLogoutConfirm(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all hover:opacity-80"
-            style={{backgroundColor:'#ef4444',color:'#ffffff'}}>
-            🚪 Logout
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Logout button */}
+            <button onClick={() => setShowLogout(true)}
+              className="flex items-center gap-1.5 px-3 py-2 md:px-4 rounded-xl text-sm font-medium transition-all active:scale-95"
+              style={{
+                border: '1.5px solid #fed7aa',
+                color: '#ea580c',
+                backgroundColor: 'transparent',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.backgroundColor='#fff7ed')}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor='transparent')}>
+              <span>🚪</span>
+              <span className="hidden sm:inline">{t.logout}</span>
+            </button>
+            {/* Delete account button */}
+            <button onClick={() => setShowDeleteAccount(true)}
+              className="flex items-center gap-1.5 px-3 py-2 md:px-4 rounded-xl text-sm font-medium transition-all active:scale-95"
+              style={{
+                border: '1.5px solid #fecaca',
+                color: '#dc2626',
+                backgroundColor: 'transparent',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.backgroundColor='#fef2f2')}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor='transparent')}>
+              <span>🗑️</span>
+              <span className="hidden sm:inline">{t.delete_account}</span>
+            </button>
+          </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
           {TABS.map(tab_ => {
-            const isActive = tab === tab_.id
             const parts = tab_.label.split(' ')
             const emoji = parts[0]
             const label = parts.slice(1).join(' ')
             return (
               <button key={tab_.id} onClick={() => setTab(tab_.id)}
-                className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all duration-150 active:scale-95
-                  ${isActive ? 'border-blue-500 bg-blue-50 shadow-md' : 'border-gray-200 bg-white hover:border-blue-300 hover:shadow-sm'}`}>
-                <span className="text-2xl">{emoji}</span>
-                <span className={`text-xs font-semibold ${isActive ? 'text-blue-700' : 'text-gray-600'}`}>{label}</span>
+                className="flex flex-col items-center gap-3 p-5 rounded-2xl border-2 border-gray-200 bg-white hover:border-blue-400 hover:bg-blue-50 hover:shadow-lg transition-all duration-150 active:scale-95 group">
+                <span className="text-3xl group-hover:scale-110 transition-transform">{emoji}</span>
+                <span className="text-xs font-semibold text-gray-600 group-hover:text-blue-700 text-center">{label}</span>
+                <span className="text-xs text-gray-300 group-hover:text-blue-400">tap to open</span>
               </button>
             )
           })}
         </div>
-
-        {tab === 'company' && company && (
-          <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
-            <h2 className="font-bold text-gray-700 mb-2">{t.settings_company}</h2>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">{t.settings_logo}</label>
-              <div className="flex items-center gap-4">
-                {company.logo_url && <img src={company.logo_url} alt="Logo" className="w-16 h-16 object-contain rounded-lg border" />}
-                <div className="flex-1">
-                  <input type="file" accept="image/*" id="logo_upload" className="hidden"
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0]; if (!file) return
-                      const fileExt = file.name.split('.').pop()
-                      const fileName = `${company.id}.${fileExt}`
-                      const { data, error } = await supabase.storage.from('company-logos').upload(fileName, file, { upsert: true })
-                      if (error) { setMsg('❌ ' + error.message); return }
-                      const { data: urlData } = supabase.storage.from('company-logos').getPublicUrl(fileName)
-                      setCompany({ ...company, logo_url: urlData.publicUrl })
-                      setMsg('✅ Logo — ' + t.btn_save); setTimeout(() => setMsg(''), 3000)
-                    }} />
-                  <label htmlFor="logo_upload" className="cursor-pointer px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm inline-block">
-                    {t.settings_logo_select}
-                  </label>
-                  {company.logo_url && (
-                    <button onClick={() => setCompany({ ...company, logo_url: null })}
-                      className="ml-2 px-3 py-2 bg-red-100 text-red-600 rounded-lg text-sm">{t.settings_logo_delete}</button>
-                  )}
-                  <p className="text-xs text-gray-400 mt-1">{t.settings_logo_hint}</p>
-                </div>
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_company_name}</label>
-              <input type="text" value={company.name || ''} onChange={e => setCompany({ ...company, name: e.target.value })}
-                className="w-full p-2 border rounded-lg text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_address}</label>
-              <textarea value={company.address || ''} onChange={e => setCompany({ ...company, address: e.target.value })}
-                className="w-full p-2 border rounded-lg text-sm" rows={2} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_phone}</label>
-                <input type="text" value={company.phone || ''} onChange={e => setCompany({ ...company, phone: toEnglishNumber(e.target.value) })}
-                  className="w-full p-2 border rounded-lg text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{t.email}</label>
-                <input type="text" value={company.email || ''} onChange={e => setCompany({ ...company, email: e.target.value })}
-                  className="w-full p-2 border rounded-lg text-sm" />
-              </div>
-            </div>
-            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-sm text-gray-800">{t.settings_allow_price_edit}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{t.settings_allow_price_edit_desc}</p>
-                </div>
-                <button onClick={() => setCompany({ ...company, allow_price_edit: !company.allow_price_edit })}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${company.allow_price_edit ? 'bg-blue-600' : 'bg-gray-300'}`}>
-                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${company.allow_price_edit ? 'translate-x-6' : 'translate-x-1'}`} />
-                </button>
-              </div>
-            </div>
-            {msg && <p className={'text-sm ' + (msg.includes('✅') ? 'text-green-600' : 'text-red-500')}>{msg}</p>}
-            <button onClick={saveCompany} disabled={compSaving} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50">
-              {compSaving ? t.settings_saving : '💾 ' + t.save}
-            </button>
-          </div>
-        )}
-
-        {tab === 'users' && (
-          <div className="bg-white rounded-xl p-6 shadow-sm">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="font-bold text-gray-700">{t.settings_users}</h2>
-              <button onClick={() => setUserModal({ full_name: '', role: 'Sales', login_pin: '0000' })}
-                className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm">{t.settings_user_add}</button>
-            </div>
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  <th className="text-left p-3 font-semibold text-gray-600">{t.settings_col_name}</th>
-                  <th className="text-left p-3 font-semibold text-gray-600">{t.settings_col_role}</th>
-                  <th className="text-left p-3 font-semibold text-gray-600">{t.settings_col_pin}</th>
-                  <th className="text-center p-3 font-semibold text-gray-600">{t.settings_col_action}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(u => (
-                  <tr key={u.id} className="border-b hover:bg-gray-50">
-                    <td className="p-3 font-medium">{u.full_name}</td>
-                    <td className="p-3">
-                      <span className={`px-2 py-1 rounded-full text-xs ${u.role === 'Admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{u.role}</span>
-                    </td>
-                    <td className="p-3 font-mono">{'●'.repeat(4)}</td>
-                    <td className="p-3 text-center">
-                      <div className="flex gap-1 justify-center">
-                        <button onClick={() => setUserModal({ ...u })} className="px-2 py-1 bg-yellow-500 text-white rounded text-xs">{t.settings_user_edit}</button>
-                        <button onClick={() => deleteUser(u.id)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">{t.settings_user_delete}</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {tab === 'pin' && (
-          <div className="bg-white rounded-xl p-6 shadow-sm max-w-md">
-            <h2 className="font-bold text-gray-700 mb-4">{t.settings_pin_title}</h2>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_pin_select}</label>
-                <select value={pinUser} onChange={e => setPinUser(e.target.value)} className="w-full p-2 border rounded-lg text-sm">
-                  <option value="">{t.settings_pin_select_placeholder}</option>
-                  {users.map(u => <option key={u.id} value={u.id}>{u.full_name} ({u.role})</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_pin_new}</label>
-                <input type="password" maxLength={4} value={newPin}
-                  onChange={e => { const v = toEnglishNumber(e.target.value); if(/^\d{0,4}$/.test(v)) setNewPin(v) }}
-                  className="w-full p-2 border rounded-lg text-sm tracking-widest text-center text-xl" placeholder="••••" />
-              </div>
-              {pinMsg && <p className={'text-sm ' + (pinMsg.includes('✅') ? 'text-green-600' : 'text-red-500')}>{pinMsg}</p>}
-              <button onClick={savePin} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm">{t.settings_pin_btn}</button>
-            </div>
-          </div>
-        )}
-
-        {tab === 'receipt' && (
-          <div className="bg-white rounded-xl p-6 shadow-sm max-w-md">
-            <h2 className="font-bold text-gray-700 mb-4">{t.settings_receipt_title}</h2>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_receipt_header}</label>
-                <textarea value={receipt.header} onChange={e => setReceipt({ ...receipt, header: e.target.value })}
-                  className="w-full p-2 border rounded-lg text-sm" rows={3} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_receipt_footer}</label>
-                <textarea value={receipt.footer} onChange={e => setReceipt({ ...receipt, footer: e.target.value })}
-                  className="w-full p-2 border rounded-lg text-sm" rows={3} />
-              </div>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" checked={receipt.show_logo} onChange={e => setReceipt({ ...receipt, show_logo: e.target.checked })}
-                  className="w-4 h-4" id="show_logo" />
-                <label htmlFor="show_logo" className="text-sm text-gray-700">{t.settings_receipt_show_logo}</label>
-              </div>
-              <button onClick={async () => {
-                  setRcptSaving(true); setMsg('')
-                  const { data: comp } = await supabase.from('profiles').select('company_id').maybeSingle()
-                  const existing = await supabase.from('receipt_settings').select('id').maybeSingle()
-                  if (existing.data?.id) {
-                    await supabase.from('receipt_settings').update({ header: receipt.header, footer: receipt.footer, show_logo: receipt.show_logo, updated_at: new Date().toISOString() }).eq('id', existing.data.id)
-                  } else {
-                    await supabase.from('receipt_settings').insert({ company_id: comp?.company_id, header: receipt.header, footer: receipt.footer, show_logo: receipt.show_logo })
-                  }
-                  localStorage.setItem('receipt_settings', JSON.stringify(receipt))
-                  setMsg('✅ ' + t.save); setRcptSaving(false); setTimeout(() => setMsg(''), 2000)
-                }} disabled={rcptSaving} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50">
-                {rcptSaving ? t.settings_saving : '💾 ' + t.save}
-              </button>
-              {msg && <p className="text-sm text-green-600">{msg}</p>}
-            </div>
-          </div>
-        )}
-
-        {tab === 'uom' && (
-          <div className="bg-white rounded-xl p-6 shadow-sm">
-            <h2 className="font-bold text-gray-700 mb-4">{t.settings_uom_title}</h2>
-            <div className="flex gap-2 mb-4">
-              <input type="text" value={newUom} onChange={e => setNewUom(e.target.value)}
-                className="flex-1 p-2 border rounded-lg text-sm" placeholder={t.settings_uom_placeholder}
-                onKeyDown={e => e.key === 'Enter' && addUom()} />
-              <button onClick={addUom} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">+ {t.add}</button>
-            </div>
-            {uomMsg && <p className={'text-sm mb-3 ' + (uomMsg.includes('✅') ? 'text-green-600' : 'text-red-500')}>{uomMsg}</p>}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-              {uoms.map(u => (
-                <div key={u.id} className={`flex items-center justify-between p-3 rounded-lg border ${u.is_default ? 'border-blue-400 bg-blue-50' : 'border-gray-200'}`}>
-                  <div>
-                    <span className="font-medium text-sm">{u.name}</span>
-                    {u.is_default && <span className="ml-2 text-xs text-blue-600">{t.settings_uom_default}</span>}
-                  </div>
-                  <div className="flex gap-1">
-                    {!u.is_default && (
-                      <button onClick={() => setDefaultUom(u.id)} className="px-2 py-1 bg-blue-100 text-blue-600 rounded text-xs">★</button>
-                    )}
-                    <button onClick={() => deleteUom(u.id)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">{t.delete}</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {tab === 'printer' && (
-          <div className="bg-white rounded-xl p-6 shadow-sm space-y-6">
-            <h2 className="font-bold text-gray-700">{t.settings_printer_title}</h2>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-3">{t.settings_printer_type}</label>
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { type: 'browser', icon: '🌐', label: t.settings_printer_browser, desc: 'PDF / Normal Printer' },
-                  { type: 'network', icon: '📡', label: t.settings_printer_network, desc: 'IP Address' },
-                  { type: 'escpos', icon: '🧾', label: t.settings_printer_escpos, desc: 'USB Thermal' },
-                ].map(p => (
-                  <button key={p.type} onClick={() => setPrinter({ ...printer, printer_type: p.type })}
-                    className={`p-4 rounded-xl border-2 text-center transition-all ${printer.printer_type === p.type ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                    <div className="text-2xl mb-1">{p.icon}</div>
-                    <div className="font-medium text-sm">{p.label}</div>
-                    <div className="text-xs text-gray-500 mt-1">{p.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-            {printer.printer_type === 'browser' && (
-              <div className="bg-blue-50 rounded-xl p-4 space-y-3">
-                <h3 className="font-medium text-blue-800">🌐 {t.settings_printer_browser}</h3>
-                <div className="flex items-center gap-2">
-                  <input type="checkbox" id="auto_print_browser" checked={printer.auto_print}
-                    onChange={e => setPrinter({ ...printer, auto_print: e.target.checked })} className="w-4 h-4" />
-                  <label htmlFor="auto_print_browser" className="text-sm text-gray-700">{t.settings_printer_auto}</label>
-                </div>
-                <button onClick={() => window.print()} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">{t.settings_printer_test}</button>
-              </div>
-            )}
-            {printer.printer_type === 'network' && (
-              <div className="bg-green-50 rounded-xl p-4 space-y-3">
-                <h3 className="font-medium text-green-800">📡 {t.settings_printer_network}</h3>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2">
-                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_printer_ip}</label>
-                    <input type="text" value={printer.network_ip || ''} onChange={e => setPrinter({ ...printer, network_ip: e.target.value })}
-                      className="w-full p-2 border rounded-lg text-sm" placeholder="192.168.1.100" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_printer_port}</label>
-                    <input type="number" value={printer.network_port || 9100} onChange={e => setPrinter({ ...printer, network_port: parseInt(e.target.value) })}
-                      className="w-full p-2 border rounded-lg text-sm" />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_printer_width}</label>
-                  <select value={printer.paper_width || 80} onChange={e => setPrinter({ ...printer, paper_width: parseInt(e.target.value) })}
-                    className="w-full p-2 border rounded-lg text-sm">
-                    <option value={58}>58mm</option><option value={80}>80mm</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input type="checkbox" id="auto_print_net" checked={printer.auto_print}
-                    onChange={e => setPrinter({ ...printer, auto_print: e.target.checked })} className="w-4 h-4" />
-                  <label htmlFor="auto_print_net" className="text-sm text-gray-700">{t.settings_printer_auto}</label>
-                </div>
-              </div>
-            )}
-            {printer.printer_type === 'escpos' && (
-              <div className="bg-orange-50 rounded-xl p-4 space-y-3">
-                <h3 className="font-medium text-orange-800">🧾 {t.settings_printer_escpos}</h3>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_printer_width}</label>
-                  <select value={printer.paper_width || 80} onChange={e => setPrinter({ ...printer, paper_width: parseInt(e.target.value) })}
-                    className="w-full p-2 border rounded-lg text-sm">
-                    <option value={58}>58mm</option><option value={80}>80mm</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input type="checkbox" id="auto_print_esc" checked={printer.auto_print}
-                    onChange={e => setPrinter({ ...printer, auto_print: e.target.checked })} className="w-4 h-4" />
-                  <label htmlFor="auto_print_esc" className="text-sm text-gray-700">{t.settings_printer_auto}</label>
-                </div>
-                <button onClick={async () => {
-                    try {
-                      const device = await (navigator as any).usb.requestDevice({ filters: [] })
-                      setPrinterMsg('USB: ' + device.productName)
-                    } catch { setPrinterMsg('USB ချိတ်မရပါ') }
-                  }} className="px-4 py-2 bg-orange-600 text-white rounded-lg text-sm">
-                  {t.settings_printer_usb}
-                </button>
-              </div>
-            )}
-            {printerMsg && <p className={'text-sm font-medium ' + (printerMsg.includes('✅') || printerMsg.includes('USB:') ? 'text-green-600' : 'text-red-500')}>{printerMsg}</p>}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_printer_size}</label>
-              <select value={printer.paper_size || 'receipt'} onChange={e => setPrinter({ ...printer, paper_size: e.target.value })}
-                className="w-full p-2 border rounded-lg text-sm">
-                <option value="receipt">🧾 Receipt (80mm / 58mm)</option>
-                <option value="a4">📄 A4 (210 x 297mm)</option>
-                <option value="letter">📄 Letter (216 x 279mm)</option>
-                <option value="legal">📄 Legal (216 x 356mm)</option>
-              </select>
-            </div>
-            <button onClick={savePrinter} disabled={printerSaving} className="w-full py-3 bg-blue-600 text-white rounded-xl text-sm font-medium disabled:opacity-50">
-              {printerSaving ? t.settings_saving : t.settings_printer_save}
-            </button>
-          </div>
-        )}
       </div>
 
+      {tab && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setTab(null)} />
+          <div className="relative w-full max-w-lg bg-white shadow-2xl flex flex-col h-full" style={{backgroundColor:'var(--color-card)'}}>
+            <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0" style={{borderColor:'var(--color-border)'}}>
+              <h2 className="font-bold text-lg" style={{color:'var(--color-text)'}}>{TABS.find(tb => tb.id === tab)?.label}</h2>
+              <button onClick={() => setTab(null)} className="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 text-lg">✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+
+              {tab === 'company' && company && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-2">{t.settings_logo}</label>
+                    <div className="flex items-center gap-4">
+                      {company.logo_url && <img src={company.logo_url} alt="Logo" className="w-16 h-16 object-contain rounded-lg border" />}
+                      <div className="flex-1">
+                        <input type="file" accept="image/*" id="logo_upload" className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0]; if (!file) return
+                            const fileExt = file.name.split('.').pop()
+                            const fileName = `${company.id}.${fileExt}`
+                            const { error } = await supabase.storage.from('company-logos').upload(fileName, file, { upsert: true })
+                            if (error) { setMsg('❌ ' + error.message); return }
+                            const { data: urlData } = supabase.storage.from('company-logos').getPublicUrl(fileName)
+                            setCompany({ ...company, logo_url: urlData.publicUrl })
+                            setMsg('✅ Logo — ' + t.btn_save); setTimeout(() => setMsg(''), 3000)
+                          }} />
+                        <label htmlFor="logo_upload" className="cursor-pointer px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm inline-block">{t.settings_logo_select}</label>
+                        {company.logo_url && (
+                          <button onClick={() => setCompany({ ...company, logo_url: null })} className="ml-2 px-3 py-2 bg-red-100 text-red-600 rounded-lg text-sm">{t.settings_logo_delete}</button>
+                        )}
+                        <p className="text-xs text-gray-400 mt-1">{t.settings_logo_hint}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_company_name}</label>
+                    <input type="text" value={company.name || ''} onChange={e => setCompany({...company, name: e.target.value})} className="w-full p-2 border rounded-lg text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_address}</label>
+                    <textarea value={company.address || ''} onChange={e => setCompany({...company, address: e.target.value})} className="w-full p-2 border rounded-lg text-sm" rows={2} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_phone}</label>
+                      <input type="text" value={company.phone || ''} onChange={e => setCompany({...company, phone: toEnglishNumber(e.target.value)})} className="w-full p-2 border rounded-lg text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">{t.email}</label>
+                      <input type="text" value={company.email || ''} onChange={e => setCompany({...company, email: e.target.value})} className="w-full p-2 border rounded-lg text-sm" />
+                    </div>
+                  </div>
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-sm text-gray-800">{t.settings_allow_price_edit}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{t.settings_allow_price_edit_desc}</p>
+                      </div>
+                      <button onClick={() => setCompany({...company, allow_price_edit: !company.allow_price_edit})}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${company.allow_price_edit ? 'bg-blue-600' : 'bg-gray-300'}`}>
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${company.allow_price_edit ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                    </div>
+                  </div>
+                  {msg && <p className={'text-sm ' + (msg.includes('✅') ? 'text-green-600' : 'text-red-500')}>{msg}</p>}
+                  <button onClick={async () => { await saveCompany(); setTab(null) }} disabled={compSaving} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium disabled:opacity-50">
+                    {compSaving ? t.settings_saving : '💾 ' + t.save}
+                  </button>
+                </div>
+              )}
+
+              {tab === 'users' && (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <p className="text-sm text-gray-500">{t.settings_users}</p>
+                    <button onClick={() => setUserModal({ full_name: '', role: 'Sales' })} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm">{t.settings_user_add}</button>
+                  </div>
+                  {users.map(u => (
+                    <div key={u.id} className="flex items-center justify-between p-3 border rounded-xl hover:bg-gray-50">
+                      <div>
+                        <p className="font-medium text-sm">{u.full_name}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className={`px-2 py-0.5 rounded-full text-xs ${u.role === 'Admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{u.role}</span>
+                          <span className="text-xs text-gray-400">
+                            {u.auth_user_id?.startsWith('staff-') ? '🔑 Staff PIN' : '📧 Admin'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => setUserModal({id: u.id, full_name: u.full_name, role: u.role, role_id: u.role_id, permissions: u.permissions})} className="px-2 py-1 bg-yellow-500 text-white rounded text-xs">{t.settings_user_edit}</button>
+                        <button onClick={() => deleteUser(u.id)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">{t.settings_user_delete}</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {tab === 'pin' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_pin_select}</label>
+                    <select value={pinUser} onChange={e => setPinUser(e.target.value)} className="w-full p-2 border rounded-lg text-sm">
+                      <option value="">{t.settings_pin_select_placeholder}</option>
+                      {users.map(u => <option key={u.id} value={u.id}>{u.full_name} ({u.role})</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_pin_new}</label>
+                    <input type="password" maxLength={4} value={newPin}
+                      onChange={e => { const v = toEnglishNumber(e.target.value); if(/^\d{0,4}$/.test(v)) setNewPin(v) }}
+                      className="w-full p-2 border rounded-lg text-sm tracking-widest text-center text-xl" placeholder="••••" />
+                  </div>
+                  {pinMsg && <p className={'text-sm ' + (pinMsg.includes('✅') ? 'text-green-600' : 'text-red-500')}>{pinMsg}</p>}
+                  <button onClick={savePin} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium">{t.settings_pin_btn}</button>
+                </div>
+              )}
+
+              {tab === 'receipt' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_receipt_header}</label>
+                    <textarea value={receipt.header} onChange={e => setReceipt({...receipt, header: e.target.value})} className="w-full p-2 border rounded-lg text-sm" rows={3} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_receipt_footer}</label>
+                    <textarea value={receipt.footer} onChange={e => setReceipt({...receipt, footer: e.target.value})} className="w-full p-2 border rounded-lg text-sm" rows={3} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" checked={receipt.show_logo} onChange={e => setReceipt({...receipt, show_logo: e.target.checked})} className="w-4 h-4" id="show_logo" />
+                    <label htmlFor="show_logo" className="text-sm text-gray-700">{t.settings_receipt_show_logo}</label>
+                  </div>
+                  {msg && <p className="text-sm text-green-600">{msg}</p>}
+                  <button onClick={async () => {
+                    setRcptSaving(true); setMsg('')
+                    const rcptCompId = await getCompanyId()
+                    const existing = await supabase.from('receipt_settings').select('id').maybeSingle()
+                    if (existing.data?.id) {
+                      await supabase.from('receipt_settings').update({ header: receipt.header, footer: receipt.footer, show_logo: receipt.show_logo, updated_at: new Date().toISOString() }).eq('id', existing.data.id)
+                    } else {
+                      await supabase.from('receipt_settings').insert({ company_id: rcptCompId, header: receipt.header, footer: receipt.footer, show_logo: receipt.show_logo })
+                    }
+                    localStorage.setItem('receipt_settings', JSON.stringify(receipt))
+                    setMsg('✅ ' + t.save); setRcptSaving(false); setTimeout(() => setMsg(''), 2000)
+                  }} disabled={rcptSaving} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium disabled:opacity-50">
+                    {rcptSaving ? t.settings_saving : '💾 ' + t.save}
+                  </button>
+                </div>
+              )}
+
+              {tab === 'uom' && (
+                <div className="space-y-3">
+                  <div className="flex gap-2">
+                    <input type="text" value={newUom} onChange={e => setNewUom(e.target.value)}
+                      className="flex-1 p-2 border rounded-lg text-sm" placeholder={t.settings_uom_placeholder}
+                      onKeyDown={e => e.key === 'Enter' && addUom()} />
+                    <button onClick={addUom} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">+ {t.add}</button>
+                  </div>
+                  {uomMsg && <p className={'text-sm ' + (uomMsg.includes('✅') ? 'text-green-600' : 'text-red-500')}>{uomMsg}</p>}
+                  <div className="grid grid-cols-2 gap-2">
+                    {uoms.map(u => (
+                      <div key={u.id} className={`flex items-center justify-between p-3 rounded-lg border ${u.is_default ? 'border-blue-400 bg-blue-50' : 'border-gray-200'}`}>
+                        <div>
+                          <span className="font-medium text-sm">{u.name}</span>
+                          {u.is_default && <span className="ml-2 text-xs text-blue-600">{t.settings_uom_default}</span>}
+                        </div>
+                        <div className="flex gap-1">
+                          {!u.is_default && <button onClick={() => setDefaultUom(u.id)} className="px-2 py-1 bg-blue-100 text-blue-600 rounded text-xs">★</button>}
+                          <button onClick={() => deleteUom(u.id)} className="px-2 py-1 bg-red-500 text-white rounded text-xs">{t.delete}</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {tab === 'printer' && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-3">{t.settings_printer_type}</label>
+                    <div className="grid grid-cols-3 gap-3">
+                      {([
+                        { type: 'browser', icon: '🌐', label: t.settings_printer_browser, desc: 'PDF/Normal' },
+                        { type: 'network', icon: '📡', label: t.settings_printer_network, desc: 'IP Address' },
+                        { type: 'escpos', icon: '🧾', label: t.settings_printer_escpos, desc: 'USB Thermal' },
+                      ] as {type:string;icon:string;label:string;desc:string}[]).map(p => (
+                        <button key={p.type} onClick={() => setPrinter({...printer, printer_type: p.type})}
+                          className={`p-4 rounded-xl border-2 text-center transition-all ${printer.printer_type === p.type ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                          <div className="text-2xl mb-1">{p.icon}</div>
+                          <div className="font-medium text-xs">{p.label}</div>
+                          <div className="text-xs text-gray-500 mt-1">{p.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {printer.printer_type === 'network' && (
+                    <div className="space-y-3 p-4 bg-green-50 rounded-xl">
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="col-span-2">
+                          <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_printer_ip}</label>
+                          <input type="text" value={printer.network_ip || ''} onChange={e => setPrinter({...printer, network_ip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" placeholder="192.168.1.100" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_printer_port}</label>
+                          <input type="number" value={printer.network_port || 9100} onChange={e => setPrinter({...printer, network_port: parseInt(e.target.value)})} className="w-full p-2 border rounded-lg text-sm" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {printer.printer_type === 'browser' && (
+                    <div className="p-4 bg-blue-50 rounded-xl">
+                      <div className="flex items-center gap-2 mb-3">
+                        <input type="checkbox" id="auto_print_b" checked={printer.auto_print} onChange={e => setPrinter({...printer, auto_print: e.target.checked})} className="w-4 h-4" />
+                        <label htmlFor="auto_print_b" className="text-sm text-gray-700">{t.settings_printer_auto}</label>
+                      </div>
+                      <button onClick={() => window.print()} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">{t.settings_printer_test}</button>
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_printer_size}</label>
+                    <select value={printer.paper_size || 'receipt'} onChange={e => setPrinter({...printer, paper_size: e.target.value})} className="w-full p-2 border rounded-lg text-sm">
+                      <option value="receipt">🧾 Receipt (80mm/58mm)</option>
+                      <option value="a4">📄 A4</option>
+                      <option value="letter">📄 Letter</option>
+                      <option value="legal">📄 Legal</option>
+                    </select>
+                  </div>
+                  {printerMsg && <p className={'text-sm ' + (printerMsg.includes('✅') ? 'text-green-600' : 'text-red-500')}>{printerMsg}</p>}
+                  <button onClick={savePrinter} disabled={printerSaving} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium disabled:opacity-50">
+                    {printerSaving ? t.settings_saving : t.settings_printer_save}
+                  </button>
+                </div>
+              )}
+
+              {tab === 'appearance' && (
+                <div className="space-y-5">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-3">{t.theme}</label>
+                    <div className="grid grid-cols-3 gap-3">
+                      {([['light','☀️',t.theme_light,'#f9fafb'],['dark','🌙',t.theme_dark,'#1f2937'],['classic','🏛️',t.theme_classic,'#f5f0e8']] as [string,string,string,string][]).map(([val,icon,label,bg]) => (
+                        <button key={val} onClick={() => setAppTheme(prev => ({...prev, mode: val}))}
+                          className={`p-4 rounded-xl border-2 text-center transition-all ${appTheme.mode === val ? 'border-blue-500 ring-2 ring-blue-300' : 'border-gray-200'}`}
+                          style={{backgroundColor: bg}}>
+                          <div className="text-2xl mb-1">{icon}</div>
+                          <div className="font-medium text-sm">{label}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-3">{t.primary_color}</label>
+                    <div className="flex gap-3 flex-wrap">
+                      {([['blue','#2563eb','Blue'],['green','#16a34a','Green'],['purple','#9333ea','Purple'],['orange','#f97316','Orange'],['red','#dc2626','Red'],['teal','#0d9488','Teal']] as [string,string,string][]).map(([val,hex,label]) => (
+                        <button key={val} onClick={() => setAppTheme(prev => ({...prev, primaryColor: val}))}
+                          className={`flex flex-col items-center gap-1 p-2 rounded-xl border-2 transition-all ${appTheme.primaryColor === val ? 'border-gray-800 scale-110' : 'border-transparent hover:border-gray-300'}`}>
+                          <div className="w-10 h-10 rounded-full shadow-md" style={{backgroundColor: hex}} />
+                          <span className="text-xs font-medium text-gray-600">{label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-3">{t.font_size}</label>
+                    <div className="grid grid-cols-3 gap-3">
+                      {([['small',t.font_small,'text-sm'],['medium',t.font_medium,'text-base'],['large',t.font_large,'text-lg']] as [string,string,string][]).map(([val,label,cls]) => (
+                        <button key={val} onClick={() => setAppTheme(prev => ({...prev, fontSize: val}))}
+                          className={`p-4 rounded-xl border-2 text-center transition-all ${appTheme.fontSize === val ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}>
+                          <span className={'font-medium ' + cls}>{label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {appearanceMsg && <p className="text-sm text-green-600">{appearanceMsg}</p>}
+                  <button onClick={() => {
+                    localStorage.setItem('app_theme', JSON.stringify(appTheme))
+                    document.documentElement.setAttribute('data-theme', appTheme.mode)
+                    const colors: Record<string,string> = {blue:'#2563eb',green:'#16a34a',purple:'#9333ea',orange:'#f97316',red:'#dc2626',teal:'#0d9488'}
+                    const fonts: Record<string,string> = {small:'13px',medium:'15px',large:'17px'}
+                    const themes: Record<string,{bg:string;card:string;text:string;border:string;sidebar:string}> = {
+                      light:{bg:'#f9fafb',card:'#ffffff',text:'#111827',border:'#e5e7eb',sidebar:'#111827'},
+                      dark:{bg:'#1f2937',card:'#374151',text:'#f9fafb',border:'#4b5563',sidebar:'#030712'},
+                      classic:{bg:'#f5f0e8',card:'#fefcf8',text:'#2c1a0e',border:'#d4b896',sidebar:'#3d2b1f'},
+                    }
+                    const theme = themes[appTheme.mode]
+                    const root = document.documentElement
+                    root.style.setProperty('--color-primary', colors[appTheme.primaryColor])
+                    root.style.setProperty('--color-bg', theme.bg)
+                    root.style.setProperty('--color-card', theme.card)
+                    root.style.setProperty('--color-text', theme.text)
+                    root.style.setProperty('--color-border', theme.border)
+                    root.style.setProperty('--color-sidebar', theme.sidebar)
+                    const sv: Record<string,Record<string,string>> = {
+                      light:{'--sidebar-text':'#000000','--sidebar-hover-bg':'#F1F5F9','--sidebar-hover-text':'#0F172A','--sidebar-active-bg':'#0D9488','--sidebar-active-text':'#FFFFFF','--sidebar-border':'#CBD5E1','--sidebar-group-text':'#374151','--sidebar-title':'#000000','--sidebar-icon':'#374151'},
+                      dark:{'--sidebar-text':'#CBD5E1','--sidebar-hover-bg':'#1f2937','--sidebar-hover-text':'#FFFFFF','--sidebar-active-bg':'#0D9488','--sidebar-active-text':'#FFFFFF','--sidebar-border':'#374151','--sidebar-group-text':'#6B7280','--sidebar-title':'#FFFFFF','--sidebar-icon':'#9CA3AF'},
+                      classic:{'--sidebar-text':'#e8d5c4','--sidebar-hover-bg':'#5c4033','--sidebar-hover-text':'#fefcf8','--sidebar-active-bg':'#8b4513','--sidebar-active-text':'#FFFFFF','--sidebar-border':'#5c4033','--sidebar-group-text':'#a0836e','--sidebar-title':'#fefcf8','--sidebar-icon':'#a0836e'},
+                    }
+                    Object.entries(sv[appTheme.mode] || sv.light).forEach(([k,v]) => root.style.setProperty(k,v))
+                    document.body.style.fontSize = fonts[appTheme.fontSize]
+                    document.body.style.backgroundColor = theme.bg
+                    document.body.style.color = theme.text
+                    window.dispatchEvent(new Event('theme-updated'))
+                    setAppearanceMsg('✅ ' + t.appearance_saved)
+                    setTimeout(() => setAppearanceMsg(''), 2000)
+                  }} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium">
+                    💾 {t.btn_save}
+                  </button>
+                </div>
+              )}
+
+              {tab === 'menu_control' && (
+                <div className="space-y-4">
+                  <p className="text-sm text-gray-500">Sidebar မှာ မပြချင်တဲ့ menu တွေကို ဖျောက်နိုင်သည်</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      {key:'dashboard',icon:'📊',label:t.dashboard},{key:'pos',icon:'🛒',label:t.pos},
+                      {key:'products',icon:'📦',label:t.products},{key:'inventory',icon:'🏭',label:t.inventory},
+                      {key:'grn',icon:'📥',label:t.grn},{key:'customers',icon:'👤',label:t.customers},
+                      {key:'suppliers',icon:'🏪',label:t.suppliers},{key:'purchases',icon:'🛍️',label:t.purchases},
+                      {key:'shipments',icon:'🚚',label:t.shipments},{key:'expenses',icon:'💸',label:t.expenses},
+                      {key:'reports',icon:'📈',label:t.reports},
+                    ] as {key:string;icon:string;label:string}[]).map(item => {
+                      const isHidden = hiddenMenus.includes(item.key)
+                      return (
+                        <label key={item.key} className={'flex items-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all ' + (isHidden ? 'border-red-200 bg-red-50 opacity-60' : 'border-green-200 bg-green-50')}>
+                          <input type="checkbox" checked={!isHidden}
+                            onChange={() => setHiddenMenus(prev => prev.includes(item.key) ? prev.filter(k => k !== item.key) : [...prev, item.key])}
+                            className="w-4 h-4" />
+                          <span className="text-base">{item.icon}</span>
+                          <span className="text-xs font-medium">{item.label}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                  {menuControlMsg && <p className="text-sm text-green-600">{menuControlMsg}</p>}
+                  <button onClick={() => {
+                    localStorage.setItem('hidden_menus', JSON.stringify(hiddenMenus))
+                    window.dispatchEvent(new Event('menu-updated'))
+                    setMenuControlMsg('✅ ' + t.menu_control_saved)
+                    setTimeout(() => setMenuControlMsg(''), 2000)
+                  }} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium">
+                    💾 {t.btn_save}
+                  </button>
+                </div>
+              )}
+
+              {tab === 'roles' && (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <p className="text-sm text-gray-500">{t.settings_role_title}</p>
+                    <button onClick={() => setRoleModal({ name: '', permissions: [] })} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm">{t.settings_role_add}</button>
+                  </div>
+                  {roles.map(r => (
+                    <div key={r.id} className="border rounded-xl p-4 flex items-start justify-between">
+                      <div>
+                        <p className="font-bold text-gray-800">{r.name}</p>
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {(r.permissions || []).map((p: string) => (
+                            <span key={p} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{ALL_PAGES.find(x => x.key === p)?.label || p}</span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex gap-2 ml-4">
+                        <button onClick={() => setRoleModal({...r, permissions: r.permissions || []})} className="px-3 py-1 bg-yellow-500 text-white rounded text-xs">{t.settings_role_edit}</button>
+                        <button onClick={() => deleteRole(r.id)} className="px-3 py-1 bg-red-500 text-white rounded text-xs">{t.settings_role_delete}</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
+
       {userModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
             <h2 className="text-lg font-bold mb-4">{userModal.id ? t.settings_user_modal_edit : t.settings_user_modal_add}</h2>
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_user_name}</label>
-                <input type="text" value={userModal.full_name}
-                  onChange={e => setUserModal({ ...userModal, full_name: e.target.value })}
-                  className="w-full p-2 border rounded-lg text-sm" />
+                <input type="text" value={userModal.full_name} onChange={e => setUserModal({...userModal, full_name: e.target.value})} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_user_pin}</label>
                 <input type="text" maxLength={4} value={userModal.login_pin || ''}
-                  onChange={e => { const v = toEnglishNumber(e.target.value); if(/^\d{0,4}$/.test(v)) setUserModal({ ...userModal, login_pin: v }) }}
+                  onChange={e => { const v = toEnglishNumber(e.target.value); if(/^\d{0,4}$/.test(v)) setUserModal({...userModal, login_pin: v}) }}
                   className="w-full p-2 border rounded-lg text-sm text-center tracking-widest text-xl" placeholder="••••" />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-2">{t.settings_user_role}</label>
                 <div className="flex gap-2 flex-wrap mb-3">
-                  <button onClick={() => setUserModal({ ...userModal, role: 'Admin', role_id: null, permissions: ['all'] })}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border-2 transition-all ${userModal.role==='Admin' ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-600'}`}>
+                  <button onClick={() => setUserModal({...userModal, role: 'Admin', role_id: null, permissions: ['all']})}
+                    className={'px-3 py-1.5 rounded-lg text-xs font-medium border-2 transition-all ' + (userModal.role==='Admin' ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-600')}>
                     🔑 Admin
                   </button>
                   {roles.map((r:any) => (
-                    <button key={r.id} onClick={() => setUserModal({ ...userModal, role: r.name, role_id: r.id, permissions: r.permissions || [] })}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border-2 transition-all ${userModal.role_id===r.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600'}`}>
+                    <button key={r.id} onClick={() => setUserModal({...userModal, role: r.name, role_id: r.id, permissions: r.permissions || []})}
+                      className={'px-3 py-1.5 rounded-lg text-xs font-medium border-2 transition-all ' + (userModal.role_id===r.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600')}>
                       {r.name}
                     </button>
                   ))}
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-2">
-                  {t.settings_user_permissions}
-                  {userModal.role === 'Admin' && <span className="ml-2 text-purple-600">{t.settings_user_admin_note}</span>}
-                </label>
-                <div className={`grid grid-cols-2 gap-2 ${userModal.role==='Admin' ? 'opacity-40 pointer-events-none' : ''}`}>
+                <div className={'grid grid-cols-2 gap-2 ' + (userModal.role==='Admin' ? 'opacity-40 pointer-events-none' : '')}>
                   {ALL_PAGES.map((p:any) => {
                     const perms: string[] = userModal.permissions || []
                     const checked = perms.includes('all') || perms.includes(p.key)
@@ -644,7 +751,7 @@ export default function SettingsPage() {
                           onChange={() => {
                             const cur: string[] = userModal.permissions || []
                             const updated = cur.includes(p.key) ? cur.filter((x:string) => x !== p.key) : [...cur, p.key]
-                            setUserModal({ ...userModal, permissions: updated })
+                            setUserModal({...userModal, permissions: updated})
                           }} className="w-4 h-4" />
                         <span className="text-xs">{p.label}</span>
                       </label>
@@ -663,54 +770,20 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {tab === 'roles' && (
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-bold">{t.settings_role_title}</h2>
-            <button onClick={() => setRoleModal({ name: '', permissions: [] })}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">{t.settings_role_add}</button>
-          </div>
-          <div className="space-y-3">
-            {roles.map(r => (
-              <div key={r.id} className="border rounded-lg p-4 flex items-start justify-between">
-                <div>
-                  <p className="font-bold text-gray-800">{r.name}</p>
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {(r.permissions || []).map((p: string) => (
-                      <span key={p} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                        {ALL_PAGES.find(x => x.key === p)?.label || p}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex gap-2 ml-4">
-                  <button onClick={() => setRoleModal({ ...r, permissions: r.permissions || [] })}
-                    className="px-3 py-1 bg-yellow-500 text-white rounded text-xs">{t.settings_role_edit}</button>
-                  <button onClick={() => deleteRole(r.id)}
-                    className="px-3 py-1 bg-red-500 text-white rounded text-xs">{t.settings_role_delete}</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {roleModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
             <h3 className="font-bold text-lg mb-4">🔐 {roleModal.id ? t.settings_role_modal_edit : t.settings_role_modal_add}</h3>
             <div className="mb-4">
               <label className="block text-xs font-medium text-gray-700 mb-1">{t.settings_role_name}</label>
-              <input type="text" value={roleModal.name} onChange={e => setRoleModal({ ...roleModal, name: e.target.value })}
-                className="w-full p-2 border rounded-lg text-sm" />
+              <input type="text" value={roleModal.name} onChange={e => setRoleModal({...roleModal, name: e.target.value})} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div className="mb-4">
               <label className="block text-xs font-medium text-gray-700 mb-2">{t.settings_role_permissions}</label>
               <div className="grid grid-cols-2 gap-2">
                 {ALL_PAGES.map(p => (
                   <label key={p.key} className="flex items-center gap-2 p-2 border rounded-lg cursor-pointer hover:bg-gray-50">
-                    <input type="checkbox" checked={(roleModal.permissions || []).includes(p.key)}
-                      onChange={() => togglePerm(p.key)} className="w-4 h-4" />
+                    <input type="checkbox" checked={(roleModal.permissions || []).includes(p.key)} onChange={() => togglePerm(p.key)} className="w-4 h-4" />
                     <span className="text-sm">{p.label}</span>
                   </label>
                 ))}
@@ -718,8 +791,7 @@ export default function SettingsPage() {
             </div>
             <div className="flex gap-2">
               <button onClick={() => setRoleModal(null)} className="flex-1 py-2 border rounded-lg text-sm">{t.cancel}</button>
-              <button onClick={saveRole} disabled={roleSaving || !roleModal.name}
-                className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50">
+              <button onClick={saveRole} disabled={roleSaving || !roleModal.name} className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50">
                 {roleSaving ? t.settings_saving : '✅ ' + t.save}
               </button>
             </div>
@@ -727,208 +799,52 @@ export default function SettingsPage() {
         </div>
       )}
 
-
-      {tab === 'appearance' && (
-        <div className="p-6 max-w-4xl mx-auto">
-          <div className="bg-white rounded-xl p-6 shadow-sm space-y-6">
-            <h2 className="font-bold text-gray-700 text-lg">🎨 {t.appearance}</h2>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">{t.theme}</label>
-              <div className="grid grid-cols-3 gap-3">
-                {([['light','☀️',t.theme_light,'#f9fafb'],['dark','🌙',t.theme_dark,'#1f2937'],['classic','🏛️',t.theme_classic,'#f5f0e8']] as [string,string,string,string][]).map(([val,icon,label,bg]) => (
-                  <button key={val} onClick={() => { const n={...appTheme,mode:val}; setAppTheme(n); applyTheme(n) }}
-                    className={`p-4 rounded-xl border-2 text-center transition-all ${appTheme.mode === val ? 'border-blue-500 ring-2 ring-blue-300' : 'border-gray-200 hover:border-gray-300'}`}
-                    style={{backgroundColor: bg}}>
-                    <div className="text-2xl mb-1">{icon}</div>
-                    <div className="font-medium text-sm">{label}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">{t.primary_color}</label>
-              <div className="flex gap-3 flex-wrap">
-                {([['blue','#2563eb','Blue'],['green','#16a34a','Green'],['purple','#9333ea','Purple'],['orange','#f97316','Orange'],['red','#dc2626','Red'],['teal','#0d9488','Teal']] as [string,string,string][]).map(([val,hex,label]) => (
-                  <button key={val} onClick={() => { const n={...appTheme,primaryColor:val}; setAppTheme(n); applyTheme(n) }}
-                    className={`flex flex-col items-center gap-1 p-2 rounded-xl border-2 transition-all ${appTheme.primaryColor === val ? 'border-gray-800 scale-110' : 'border-transparent hover:border-gray-300'}`}>
-                    <div className="w-10 h-10 rounded-full shadow-md" style={{backgroundColor: hex}}/>
-                    <span className="text-xs font-medium text-gray-600">{label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">{t.font_size}</label>
-              <div className="grid grid-cols-3 gap-3">
-                {([['small',t.font_small,'text-sm'],['medium',t.font_medium,'text-base'],['large',t.font_large,'text-lg']] as [string,string,string][]).map(([val,label,cls]) => (
-                  <button key={val} onClick={() => { const n={...appTheme,fontSize:val}; setAppTheme(n); applyTheme(n) }}
-                    className={`p-4 rounded-xl border-2 text-center transition-all ${appTheme.fontSize === val ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                    <span className={`font-medium ${cls}`}>{label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {appearanceMsg && <p className="text-sm text-green-600">{appearanceMsg}</p>}
-            <button onClick={() => {
-              localStorage.setItem('app_theme', JSON.stringify(appTheme))
-              const colors: Record<string,string> = {blue:'#2563eb',green:'#16a34a',purple:'#9333ea',orange:'#f97316',red:'#dc2626',teal:'#0d9488'}
-              const fonts: Record<string,string> = {small:'13px',medium:'15px',large:'17px'}
-              const themes: Record<string,{bg:string;card:string;text:string;border:string;sidebar:string}> = {
-                light: {bg:'#f9fafb',card:'#ffffff',text:'#111827',border:'#e5e7eb',sidebar:'#111827'},
-                dark: {bg:'#1f2937',card:'#374151',text:'#f9fafb',border:'#4b5563',sidebar:'#030712'},
-                classic: {bg:'#f5f0e8',card:'#fefcf8',text:'#2c1a0e',border:'#d4b896',sidebar:'#3d2b1f'},
-              }
-              const theme = themes[appTheme.mode]
-              const root = document.documentElement
-              root.style.setProperty('--color-primary', colors[appTheme.primaryColor])
-              root.style.setProperty('--color-bg', theme.bg)
-              root.style.setProperty('--color-card', theme.card)
-              root.style.setProperty('--color-text', theme.text)
-              root.style.setProperty('--color-border', theme.border)
-              root.style.setProperty('--color-sidebar', theme.sidebar)
-
-              const sidebarVars: Record<string,Record<string,string>> = {
-                light: {
-                  '--sidebar-text':'#000000','--sidebar-hover-bg':'#F1F5F9',
-                  '--sidebar-hover-text':'#0F172A','--sidebar-active-bg':'#0D9488',
-                  '--sidebar-active-text':'#FFFFFF','--sidebar-border':'#CBD5E1',
-                  '--sidebar-group-text':'#374151','--sidebar-title':'#000000','--sidebar-icon':'#374151',
-                },
-                dark: {
-                  '--sidebar-text':'#CBD5E1','--sidebar-hover-bg':'#1f2937',
-                  '--sidebar-hover-text':'#FFFFFF','--sidebar-active-bg':'#0D9488',
-                  '--sidebar-active-text':'#FFFFFF','--sidebar-border':'#374151',
-                  '--sidebar-group-text':'#6B7280','--sidebar-title':'#FFFFFF','--sidebar-icon':'#9CA3AF',
-                },
-                classic: {
-                  '--sidebar-text':'#e8d5c4','--sidebar-hover-bg':'#5c4033',
-                  '--sidebar-hover-text':'#fefcf8','--sidebar-active-bg':'#8b4513',
-                  '--sidebar-active-text':'#FFFFFF','--sidebar-border':'#5c4033',
-                  '--sidebar-group-text':'#a0836e','--sidebar-title':'#fefcf8','--sidebar-icon':'#a0836e',
-                },
-              }
-              const sv = sidebarVars[appTheme.mode] || sidebarVars.light
-              Object.entries(sv).forEach(([k,v]) => root.style.setProperty(k,v))
-
-              document.body.style.fontSize = fonts[appTheme.fontSize]
-              document.body.style.backgroundColor = theme.bg
-              document.body.style.color = theme.text
-              window.dispatchEvent(new Event('theme-updated'))
-              setAppearanceMsg('✅ ' + t.appearance_saved)
-              setTimeout(() => setAppearanceMsg(''), 2000)
-            }} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm">
-              💾 {t.btn_save}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {tab === 'menu_control' && (
-        <div className="p-6 max-w-4xl mx-auto">
-          <div className="bg-white rounded-xl p-6 shadow-sm">
-            <h2 className="font-bold text-gray-700 text-lg mb-2">☰ {t.menu_show_hide}</h2>
-            <p className="text-sm text-gray-500 mb-4">Sidebar မှာ မပြချင်တဲ့ menu တွေကို ဖျောက်နိုင်သည်</p>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {[
-                {key:'dashboard',icon:'📊',label:t.dashboard},
-                {key:'pos',icon:'🛒',label:t.pos},
-                {key:'products',icon:'📦',label:t.products},
-                {key:'inventory',icon:'🏭',label:t.inventory},
-                {key:'grn',icon:'📥',label:t.grn},
-                {key:'customers',icon:'👤',label:t.customers},
-                {key:'suppliers',icon:'🏪',label:t.suppliers},
-                {key:'purchases',icon:'🛍️',label:t.purchases},
-                {key:'shipments',icon:'🚚',label:t.shipments},
-                {key:'bank_accounts',icon:'🏦',label:t.bank_accounts},
-                {key:'ar',icon:'📨',label:t.ar},
-                {key:'ap',icon:'📤',label:t.ap},
-                {key:'expenses',icon:'💸',label:t.expenses},
-                {key:'reports',icon:'📈',label:t.reports},
-                // settings ကို ဖျောက်ခွင့် မပေး - ပြန်မတွေ့မှာ
-              ].map(item => {
-                const isHidden = hiddenMenus.includes(item.key)
-                return (
-                  <label key={item.key} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${isHidden ? 'border-red-200 bg-red-50 opacity-60' : 'border-green-200 bg-green-50'}`}>
-                    <input type="checkbox" checked={!isHidden}
-                      onChange={() => setHiddenMenus(prev => prev.includes(item.key) ? prev.filter(k => k !== item.key) : [...prev, item.key])}
-                      className="w-4 h-4" />
-                    <span className="text-lg">{item.icon}</span>
-                    <span className="text-sm font-medium">{item.label}</span>
-                  </label>
-                )
-              })}
-            </div>
-            {menuControlMsg && <p className="text-sm text-green-600 mt-3">{menuControlMsg}</p>}
-            <button onClick={() => {
-              localStorage.setItem('hidden_menus', JSON.stringify(hiddenMenus))
-              window.dispatchEvent(new Event('menu-updated'))
-              setMenuControlMsg('✅ ' + t.menu_control_saved)
-              setTimeout(() => setMenuControlMsg(''), 2000)
-            }} className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-lg text-sm">
-              💾 {t.btn_save}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {tab === 'logout' && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setTab('company')}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl" onClick={e=>e.stopPropagation()}>
-            <div className="text-center mb-5">
-              <div className="text-5xl mb-3">🚪</div>
-              <h2 className="font-bold text-lg text-gray-800">Logout လုပ်မှာသေချာပါသလား?</h2>
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setTab('company')} className="flex-1 py-2.5 border-2 border-gray-200 rounded-xl text-sm font-medium">ပယ်ဖျက်</button>
-              <button onClick={async()=>{
-                const staffSession = localStorage.getItem('staff_session')
-                if(staffSession){
-                  localStorage.removeItem('staff_session')
-                  document.cookie='staff_session=; path=/; max-age=0'
-                  window.location.href='/staff-login'
-                } else {
-                  const {createClient:cc} = await import('@/lib/supabase')
-                  await cc().auth.signOut()
-                  window.location.href='/login'
-                }
-              }} className="flex-1 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium">
-                🚪 Logout
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showLogoutConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center" style={{backgroundColor:'var(--color-card)'}}>
+      {/* Logout Confirm */}
+      {showLogout && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center">
             <div className="text-5xl mb-3">🚪</div>
-            <h2 className="font-bold text-lg mb-2" style={{color:'var(--color-text)'}}>Logout လုပ်မှာသေချာပါသလား?</h2>
-            <p className="text-sm text-gray-400 mb-5">Session ပြီးဆုံးသွားမည်</p>
+            <h2 className="font-bold text-lg mb-2" style={{color:'var(--color-text)'}}>{t.logout_confirm}</h2>
+            <p className="text-sm text-gray-400 mb-5">{t.logout_confirm_desc}</p>
             <div className="flex gap-3">
-              <button onClick={()=>setShowLogoutConfirm(false)}
-                className="flex-1 py-2.5 border-2 rounded-xl text-sm font-medium"
-                style={{borderColor:'var(--color-border)',color:'var(--color-text)'}}>
-                ပယ်ဖျက်
+              <button onClick={() => setShowLogout(false)}
+                className="flex-1 py-2.5 border-2 rounded-xl text-sm font-medium" style={{borderColor:'var(--color-border)',color:'var(--color-text)'}}>
+                {t.cancel}
               </button>
-              <button onClick={async()=>{
-                const staffSession = localStorage.getItem('staff_session')
-                if(staffSession){
-                  localStorage.removeItem('staff_session')
-                  document.cookie='staff_session=; path=/; max-age=0'
-                  window.location.href='/staff-login'
-                } else {
-                  const {createClient:cc} = await import('@/lib/supabase')
-                  await cc().auth.signOut()
-                  window.location.href='/login'
-                }
-              }} className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
-                style={{backgroundColor:'#ef4444',color:'#ffffff'}}>
-                🚪 Logout
+              <button onClick={handleLogout}
+                className="flex-1 py-2.5 bg-orange-500 text-white rounded-xl text-sm font-medium">
+                🚪 {t.logout}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Account Confirm */}
+      {showDeleteAccount && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <div className="text-center mb-4">
+              <div className="text-5xl mb-3">⚠️</div>
+              <h2 className="font-bold text-lg text-red-600">{t.delete_account}</h2>
+              <p className="text-sm text-gray-500 mt-2">{t.delete_account_warning}</p>
+            </div>
+            <div className="mb-4 p-3 bg-red-50 rounded-xl border border-red-200">
+              <p className="text-xs text-red-600 font-medium mb-2">{t.type_delete_to_confirm}</p>
+              <input type="text" value={deleteConfirmText}
+                onChange={e => setDeleteConfirmText(e.target.value)}
+                className="w-full p-2 border border-red-300 rounded-lg text-sm text-center font-bold tracking-widest"
+                placeholder="DELETE" />
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => { setShowDeleteAccount(false); setDeleteConfirmText('') }}
+                className="flex-1 py-2.5 border-2 rounded-xl text-sm font-medium">
+                {t.cancel}
+              </button>
+              <button onClick={handleDeleteAccount}
+                disabled={deleteConfirmText !== 'DELETE' || deleting}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium disabled:opacity-40">
+                {deleting ? t.deleting : '🗑️ ' + t.delete_account}
               </button>
             </div>
           </div>
@@ -936,7 +852,7 @@ export default function SettingsPage() {
       )}
 
       <ConfirmModal open={confirmState.open} message={confirmState.msg}
-        onConfirm={()=>{hideConfirm();confirmState.cb()}} onCancel={hideConfirm} />
+        onConfirm={() => { hideConfirm(); confirmState.cb() }} onCancel={hideConfirm} />
     </AppLayout>
   )
 }

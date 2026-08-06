@@ -1,6 +1,9 @@
 'use client'
+import { useSearchParams } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getCompanyId } from '@/lib/getCompanyId'
+import { getDb } from '@/lib/db'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
 import { toEnglishNumber } from '@/lib/utils'
@@ -32,7 +35,7 @@ interface ManualAR {
 
 export default function ARPage() {
   const { t } = useI18n()
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const [creditSales, setCreditSales] = useState<CreditSale[]>([])
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
   const [payments, setPayments] = useState<ARPayment[]>([])
@@ -48,13 +51,88 @@ export default function ARPage() {
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
   const [amount, setAmount] = useState('')
+  // Batch payment state
+  const [selectedSales, setSelectedSales] = useState<string[]>([])
+  const [showBatchModal, setShowBatchModal] = useState(false)
+  const [batchPayMethod, setBatchPayMethod] = useState<'cash'|'bank'|'split'>('cash')
+  const [batchCash, setBatchCash] = useState('')
+  const [batchBankId, setBatchBankId] = useState('')
+  const [batchSaving, setBatchSaving] = useState(false)
+
+  const toggleSale = (id: string) => setSelectedSales(prev =>
+    prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+  )
+  // getSelectedTotal(selectedCustomerData) calculated after selectedCustomerData is declared
+  const getSelectedTotal = (data: typeof selectedCustomerData) =>
+    (data?.sales || [])
+      .filter(s => selectedSales.includes(s.id))
+      .reduce((sum, s) => sum + (Number(s.total_amount) - Number(s.amount_received)), 0)
+
+  const handleBatchPay = async () => {
+    if (!selectedSales.length) return
+    setBatchSaving(true)
+    const cashAmt = batchPayMethod === 'cash' ? getSelectedTotal(selectedCustomerData)
+      : batchPayMethod === 'bank' ? 0
+      : parseFloat(batchCash) || 0
+    const bankAmt = batchPayMethod === 'bank' ? getSelectedTotal(selectedCustomerData)
+      : batchPayMethod === 'split' ? getSelectedTotal(selectedCustomerData) - cashAmt : 0
+    const today = new Date().toISOString().split('T')[0]
+    for (const saleId of selectedSales) {
+      const sale = selectedCustomerData?.sales.find(s => s.id === saleId)
+      if (!sale) continue
+      const debt = Number(sale.total_amount) - Number(sale.amount_received)
+      if (debt <= 0) continue
+      // Insert payment record
+      if (cashAmt > 0) {
+        await supabase.from('ar_payments').insert({
+          contact_id: sale.customer_id, transaction_id: saleId,
+          amount: Math.min(cashAmt / selectedSales.length, debt),
+          payment_date: today, payment_method: 'cash', notes: 'Batch payment'
+        })
+      }
+      if (bankAmt > 0 && batchBankId) {
+        await supabase.from('ar_payments').insert({
+          contact_id: sale.customer_id, transaction_id: saleId,
+          amount: Math.min(bankAmt / selectedSales.length, debt),
+          payment_date: today, payment_method: 'bank',
+          bank_account_id: batchBankId, notes: 'Batch payment'
+        })
+      }
+      // Update transaction amount_received
+      const payAmt = Math.min(cashAmt / selectedSales.length + bankAmt / selectedSales.length, debt)
+      await supabase.from('transactions').update({
+        amount_received: Number(sale.amount_received) + payAmt
+      }).eq('id', saleId)
+      // Update customer balance
+      if (sale.customer_id) {
+        const { data: contact } = await supabase.from('contacts').select('current_balance').eq('id', sale.customer_id).single()
+        if (contact) await supabase.from('contacts').update({
+          current_balance: Math.max(0, Number(contact.current_balance) - payAmt)
+        }).eq('id', sale.customer_id)
+      }
+    }
+    // Update bank balance
+    if (bankAmt > 0 && batchBankId) {
+      const { data: ba } = await supabase.from('bank_accounts').select('current_balance').eq('id', batchBankId).single()
+      if (ba) await supabase.from('bank_accounts').update({
+        current_balance: Math.max(0, Number(ba.current_balance) - bankAmt)
+      }).eq('id', batchBankId)
+    }
+    setSelectedSales([])
+    setShowBatchModal(false)
+    setBatchCash('')
+    setBatchSaving(false)
+    await fetchAll()
+  }
   const [payMethod, setPayMethod] = useState('cash')
   const [bankAccountId, setBankAccountId] = useState('')
   const [notes, setNotes] = useState('')
   const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0])
-  const [filterCustomer, setFilterCustomer] = useState('')
+  const searchParams = useSearchParams()
+  const [filterCustomer, setFilterCustomer] = useState(searchParams.get('customer') || '')
 
   const fetchAll = async () => {
+    const cid = await getCompanyId()
     setLoading(true)
     const [{ data: txns }, { data: banks }, { data: pays }, { data: custs }] = await Promise.all([
       supabase.from('transactions')
@@ -63,7 +141,7 @@ export default function ARPage() {
       supabase.from('bank_accounts').select('id,account_name,account_type:account_type_id(icon)').eq('is_active', true).eq('is_deleted', false),
       supabase.from('ar_payments').select('*,contact:contact_id(contact_name),bank_account:bank_account_id(account_name)')
         .order('created_at', { ascending: false }).limit(100),
-      supabase.from('contacts').select('id,contact_name').in('contact_type',['Customer','Both']).order('contact_name'),
+      supabase.from('contacts').select('id,contact_name').in('contact_type',['Customer','Both']).eq('company_id',cid).order('contact_name'),
     ])
     // credit sales: amount_received < total_amount
     const credits = ((txns as any)||[]).filter((x:any) => Number(x.amount_received) < Number(x.total_amount))
@@ -108,14 +186,13 @@ export default function ARPage() {
     if (!receiveModal.txn) return
     if (!amount || Number(amount) <= 0) { setMsg(t.ar_err_amount); return }
     setSaving(true); setMsg('')
-    const { data: profileData } = await supabase.from('profiles').select('company_id')
-    const companyId = profileData?.[0]?.company_id
+    const cid = await getCompanyId()
     const payAmt = Number(amount)
     const maxAmt = Number(receiveModal.txn.total_amount) - Number(receiveModal.txn.amount_received)
     const actualAmt = Math.min(payAmt, maxAmt)
 
     const { error } = await supabase.from('ar_payments').insert({
-      company_id: companyId,
+      company_id: cid,
       contact_id: receiveModal.txn.customer_id,
       transaction_id: receiveModal.txn.id,
       payment_date: payDate,
@@ -152,6 +229,7 @@ export default function ARPage() {
   const handleAddManualAR = async () => {
     if (!manualAR.customerId) { setMsg('Customer ရွေးပါ'); return }
     if (!manualAR.amount || Number(manualAR.amount) <= 0) { setMsg(t.ar_err_amount); return }
+    const cid = await getCompanyId()
     setSaving(true); setMsg('')
     const { data: profileData } = await supabase.from('profiles').select('company_id')
     const companyId = profileData?.[0]?.company_id
@@ -159,7 +237,7 @@ export default function ARPage() {
 
     // Create a manual transaction record
     const { data: newTxn, error } = await supabase.from('transactions').insert({
-      company_id: companyId,
+      company_id: cid,
       customer_id: manualAR.customerId,
       total_amount: amt,
       amount_received: 0,
@@ -200,43 +278,69 @@ export default function ARPage() {
         </div>
 
         {/* Total AR */}
-        <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6">
-          <div className="text-sm text-orange-600 mb-1">📨 {t.ar_total}</div>
-          <div className="text-3xl font-bold text-orange-700">K {totalAR.toLocaleString()}</div>
-          <div className="text-xs text-orange-500 mt-1">{customerList.length} Customer</div>
+        <div className="rounded-2xl p-5 mb-6" style={{
+          background:'linear-gradient(135deg,#fff7ed,#ffedd5)',
+          border:'1px solid #fed7aa',
+          boxShadow:'0 4px 20px rgba(249,115,22,0.1), 0 1px 4px rgba(0,0,0,0.05)'
+        }}>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium text-orange-600 mb-1">📨 {t.ar_total}</div>
+              <div className="text-3xl font-bold text-orange-700">K {totalAR.toLocaleString()}</div>
+              <div className="text-xs text-orange-500 mt-1">{customerList.length} customers · ကြွေးကျန်</div>
+            </div>
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl"
+              style={{background:'rgba(249,115,22,0.15)'}}>
+              📨
+            </div>
+          </div>
         </div>
 
         {!filterCustomer ? (
           /* Customer List */
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden mb-6">
-            <div className="p-4 border-b bg-gray-50">
-              <h2 className="font-bold text-gray-700">{t.ar_customer_list}</h2>
+          <div className="rounded-2xl overflow-hidden mb-6" style={{
+          background:'var(--color-card)',
+          border:'1px solid var(--color-border)',
+          boxShadow:'0 4px 20px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.04)'
+        }}>
+            <div className="p-4 border-b" style={{background:'var(--color-bg)', borderColor:'var(--color-border)'}}>
+              <h2 className="font-bold" style={{color:'var(--color-text)'}}>{t.ar_customer_list}</h2>
             </div>
             {/* Mobile */}
             <div className="md:hidden divide-y">
               {loading ? <p className="text-center p-8 text-gray-400">{t.loading}</p>
               : customerList.length===0 ? <p className="text-center p-8 text-gray-400">{t.ar_no_debt}</p>
               : customerList.map(c => (
-                <div key={c.id} className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50" onClick={()=>setFilterCustomer(c.id)}>
-                  <div>
-                    <p className="font-bold text-blue-700">{c.name}</p>
-                    <p className="text-xs text-gray-500">{c.sales.length} {t.ar_times}</p>
+                <div key={c.id} className="p-4 flex items-center justify-between cursor-pointer transition-colors"
+                  style={{borderBottom:'0.5px solid var(--color-border)'}}
+                  onMouseEnter={e=>(e.currentTarget.style.background='var(--color-bg)')}
+                  onMouseLeave={e=>(e.currentTarget.style.background='transparent')}
+                  onClick={()=>setFilterCustomer(c.id)}>
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold"
+                      style={{background:'rgba(249,115,22,0.12)',color:'#ea580c'}}>
+                      {c.name.charAt(0)}
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm" style={{color:'var(--color-text)'}}>{c.name}</p>
+                      <p className="text-xs text-gray-400">{c.sales.length} {t.ar_times}</p>
+                    </div>
                   </div>
                   <div className="text-right">
                     <p className="font-bold text-orange-600">K {c.totalDebt.toLocaleString()}</p>
-                    <p className="text-xs text-blue-500">{t.ar_view_btn}</p>
+                    <p className="text-xs text-blue-500 mt-0.5">{t.ar_view_btn} →</p>
                   </div>
                 </div>
               ))}
             </div>
             {/* Desktop */}
             <table className="hidden md:table w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+              <thead style={{background:'var(--color-bg)',borderBottom:'1px solid var(--color-border)'}}>
                 <tr>
-                  <th className="text-left p-3 font-semibold text-gray-600">{t.col_name}</th>
-                  <th className="text-center p-3 font-semibold text-gray-600">{t.ar_col_times}</th>
-                  <th className="text-right p-3 font-semibold text-gray-600">{t.ar_col_debt}</th>
-                  <th className="text-center p-3 font-semibold text-gray-600">{t.col_action}</th>
+                  <th className="text-left p-3 font-semibold text-gray-500 uppercase tracking-wide" style={{fontSize:'11px'}}>{t.col_name}</th>
+                  <th className="text-center p-3 font-semibold text-gray-500 uppercase tracking-wide" style={{fontSize:'11px'}}>{t.ar_col_times}</th>
+                  <th className="text-right p-3 font-semibold text-gray-500 uppercase tracking-wide" style={{fontSize:'11px'}}>{t.ar_col_debt}</th>
+                  <th className="text-center p-3 font-semibold text-gray-500 uppercase tracking-wide" style={{fontSize:'11px'}}>{t.col_action}</th>
                 </tr>
               </thead>
               <tbody>
@@ -260,17 +364,29 @@ export default function ARPage() {
         ) : (
           /* Customer Detail */
           <div>
-            <div className="bg-white rounded-xl shadow-sm overflow-hidden mb-6">
-              <div className="p-4 border-b bg-orange-50">
-                <h2 className="font-bold text-gray-800 text-lg">👤 {selectedCustomerData?.name}</h2>
+            <div className="rounded-2xl overflow-hidden mb-6" style={{
+              background:'var(--color-card)',
+              border:'1px solid var(--color-border)',
+              boxShadow:'0 4px 20px rgba(0,0,0,0.06)'
+            }}>
+              <div className="p-4 border-b" style={{background:'linear-gradient(135deg,#fff7ed,#ffedd5)',borderColor:'#fed7aa'}}>
+                <h2 className="font-bold text-gray-800 text-lg">👤 {selectedCustomerData?.name || 'Unknown Customer'}</h2>
                 <p className="text-sm text-orange-600">{t.ar_col_debt}: <span className="font-bold">K {selectedCustomerData?.totalDebt.toLocaleString()}</span></p>
               </div>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm min-w-[600px]">
                 <thead className="bg-gray-50 border-b">
                   <tr>
+                    <th className="p-3 w-8">
+                      <input type="checkbox" className="w-4 h-4"
+                        checked={selectedSales.length === (selectedCustomerData?.sales.filter(s=>Number(s.total_amount)-Number(s.amount_received)>0).length||0) && selectedSales.length > 0}
+                        onChange={e => {
+                          if (e.target.checked) setSelectedSales(selectedCustomerData?.sales.filter(s=>Number(s.total_amount)-Number(s.amount_received)>0).map(s=>s.id)||[])
+                          else setSelectedSales([])
+                        }}/>
+                    </th>
                     <th className="text-left p-3 font-semibold text-gray-600">{t.col_date}</th>
                     <th className="text-left p-3 font-semibold text-gray-600">{t.ar_items}</th>
-                    <th className="text-right p-3 font-semibold text-gray-600">စုစုပေါင်း</th>
+                    <th className="text-right p-3 font-semibold text-gray-600">{t.col_total}</th>
                     <th className="text-right p-3 font-semibold text-gray-600">{t.ar_paid}</th>
                     <th className="text-right p-3 font-semibold text-gray-600">{t.ar_col_debt}</th>
                     <th className="text-center p-3 font-semibold text-gray-600">{t.col_action}</th>
@@ -280,7 +396,12 @@ export default function ARPage() {
                   {selectedCustomerData?.sales.map(s => {
                     const debt = Number(s.total_amount) - Number(s.amount_received)
                     return (
-                      <tr key={s.id} className="border-b hover:bg-gray-50">
+                      <tr key={s.id}
+                        className={"border-b cursor-pointer transition-colors " + (selectedSales.includes(s.id) ? "bg-orange-50" : "hover:bg-gray-50")}
+                        onClick={() => debt > 0 && toggleSale(s.id)}>
+                        <td className="p-3" onClick={e => e.stopPropagation()}>
+                          {debt > 0 && <input type="checkbox" className="w-4 h-4" checked={selectedSales.includes(s.id)} onChange={() => toggleSale(s.id)}/>}
+                        </td>
                         <td className="p-3 text-xs text-gray-500">
                           {new Date(s.created_at).toLocaleDateString()}<br/>
                           <span className="text-gray-400">{new Date(s.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</span>
@@ -313,14 +434,19 @@ export default function ARPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
 
             {/* Payment History */}
-            <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-              <div className="p-4 border-b bg-gray-50">
+            <div className="rounded-2xl overflow-hidden" style={{
+              background:'var(--color-card)',
+              border:'1px solid var(--color-border)',
+              boxShadow:'0 4px 20px rgba(0,0,0,0.06)'
+            }}>
+              <div className="p-4 border-b" style={{background:'var(--color-bg)',borderColor:'var(--color-border)'}}>
                 <h2 className="font-bold text-gray-700">{t.ar_history}</h2>
               </div>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm min-w-[600px]">
                 <thead className="bg-gray-50 border-b">
                   <tr>
                     <th className="text-left p-3 font-semibold text-gray-600">{t.col_date}</th>
@@ -342,6 +468,7 @@ export default function ARPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
         )}
@@ -444,6 +571,99 @@ export default function ARPage() {
               <button onClick={() => { setAddModal(false); setMsg('') }} className="flex-1 py-2 border rounded-lg text-sm">{t.btn_cancel}</button>
               <button onClick={handleAddManualAR} disabled={saving} className="flex-1 py-2 bg-orange-500 text-white rounded-lg text-sm disabled:opacity-50">
                 {saving ? t.loading : t.ar_add_debt_confirm}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Payment Floating Bar */}
+      {selectedSales.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 z-40 flex items-center gap-3 px-5 py-3 rounded-2xl"
+          style={{
+            transform: 'translateX(-50%)',
+            backgroundColor: '#1e293b',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.2)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            backdropFilter: 'blur(12px)',
+            minWidth: '320px',
+            maxWidth: '90vw',
+          }}>
+          {/* Left - selection info */}
+          <div className="flex items-center gap-2 flex-1">
+            <div className="w-8 h-8 bg-orange-500/20 rounded-full flex items-center justify-center flex-shrink-0">
+              <span className="text-orange-400 font-bold text-xs">{selectedSales.length}</span>
+            </div>
+            <div>
+              <p className="text-white text-xs font-medium leading-none mb-0.5">ရွေးထားသည်</p>
+              <p className="text-orange-400 font-bold text-sm leading-none">K {getSelectedTotal(selectedCustomerData).toLocaleString()}</p>
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div className="w-px h-8 bg-white/10"/>
+
+          {/* Clear button */}
+          <button onClick={() => setSelectedSales([])}
+            className="p-2 rounded-xl text-white/50 hover:text-white hover:bg-white/10 transition-all text-xs">
+            ✕
+          </button>
+
+          {/* Pay button */}
+          <button onClick={() => setShowBatchModal(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-semibold transition-all active:scale-95"
+            style={{
+              background: 'linear-gradient(135deg, #10b981, #059669)',
+              boxShadow: '0 2px 12px rgba(16,185,129,0.4)',
+            }}>
+            <span>💰</span>
+            <span>ငွေချေမည်</span>
+          </button>
+        </div>
+      )}
+
+      {/* Batch Payment Modal */}
+      {showBatchModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="font-bold text-lg mb-4">💰 Batch ငွေချေမည်</h3>
+            <div className="mb-4 p-3 bg-orange-50 rounded-xl">
+              <p className="text-sm text-gray-600">{selectedSales.length} ခု • စုစုပေါင်း</p>
+              <p className="text-2xl font-bold text-orange-600">K {getSelectedTotal(selectedCustomerData).toLocaleString()}</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {([['cash','💵','Cash'],['bank','🏦','Bank'],['split','✂️','Split']] as [string,string,string][]).map(([val,icon,label]) => (
+                <button key={val} onClick={() => setBatchPayMethod(val as any)}
+                  className={"p-2 rounded-xl border-2 text-center text-xs font-medium transition-all " + (batchPayMethod===val ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200")}>
+                  <div className="text-lg">{icon}</div>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {(batchPayMethod === 'bank' || batchPayMethod === 'split') && (
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-700 mb-1">🏦 Bank Account</label>
+                <select value={batchBankId} onChange={e => setBatchBankId(e.target.value)}
+                  className="w-full p-2 border rounded-xl text-sm">
+                  <option value="">ရွေးပါ</option>
+                  {bankAccounts.map(b => <option key={b.id} value={b.id}>{(b.account_type as any)?.icon||'🏦'} {b.account_name}</option>)}
+                </select>
+              </div>
+            )}
+            {batchPayMethod === 'split' && (
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-700 mb-1">💵 Cash ပမာဏ</label>
+                <input type="number" value={batchCash} onChange={e => setBatchCash(e.target.value)}
+                  className="w-full p-2 border rounded-xl text-sm" placeholder="0" />
+                {batchCash && <p className="text-xs text-gray-500 mt-1">🏦 Bank: K {Math.max(0, getSelectedTotal(selectedCustomerData) - (parseFloat(batchCash)||0)).toLocaleString()}</p>}
+              </div>
+            )}
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setShowBatchModal(false)}
+                className="flex-1 py-2 border rounded-xl text-sm">ပယ်ဖျက်</button>
+              <button onClick={handleBatchPay} disabled={batchSaving}
+                className="flex-1 py-2 bg-green-500 text-white rounded-xl text-sm font-medium disabled:opacity-50">
+                {batchSaving ? 'ချေနေသည်...' : '✅ ချေမည်'}
               </button>
             </div>
           </div>

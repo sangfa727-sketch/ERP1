@@ -1,6 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getCompanyId } from '@/lib/getCompanyId'
+import { getDb } from '@/lib/db'
 import AppLayout from '@/components/layout/AppLayout'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import { toEnglishNumber } from '@/lib/utils'
@@ -14,7 +16,7 @@ const STATUS_COLORS: Record<string,string> = {
 // STATUS_LABELS moved to component
 
 export default function DamagedStockPage() {
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const { t } = useI18n()
   const tAny = t as any
   const STATUS_LABELS: Record<string,string> = {
@@ -34,11 +36,12 @@ export default function DamagedStockPage() {
   const hideConfirm = () => setConfirmState(s=>({...s,open:false}))
 
   const fetchAll = async () => {
+    const cid = await getCompanyId()
     setLoading(true)
     const [{ data: dmg },{ data: prods },{ data: sups }] = await Promise.all([
       supabase.from('damaged_stock').select('*,product:product_id(name,unit),supplier:supplier_id(contact_name)').order('created_at',{ascending:false}),
-      supabase.from('products').select('id,name,unit').eq('is_deleted',false).order('name'),
-      supabase.from('contacts').select('id,contact_name').in('contact_type',['Supplier','Both']).order('contact_name'),
+      supabase.from('products').select('id,name,unit').eq('is_deleted',false).eq('company_id',cid).order('name'),
+      supabase.from('contacts').select('id,contact_name').in('contact_type',['Supplier','Both']).eq('company_id',cid).order('contact_name'),
     ])
     setItems(dmg||[])
     setProducts(prods||[])

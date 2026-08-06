@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
 import ConfirmModal from '@/components/ui/ConfirmModal'
@@ -13,7 +14,7 @@ const EMPTY = {
 }
 
 export default function EmployeesPage() {
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const { t } = useI18n()
   const tAny = t as any
   const [employees, setEmployees] = useState<any[]>([])

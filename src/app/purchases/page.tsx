@@ -1,6 +1,8 @@
 'use client'
+import { getCompanyId } from '@/lib/getCompanyId'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
@@ -9,7 +11,7 @@ import { toEnglishNumber } from '@/lib/utils'
 interface LineItem { product_id: string; product_name: string; qty: any; unit_price: any; isNew?: boolean; newName?: string; unit?: string }
 
 export default function PurchasesPage() {
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const { t } = useI18n()
   const [purchases, setPurchases] = useState<any[]>([])
   const [products, setProducts] = useState<any[]>([])
@@ -29,11 +31,12 @@ export default function PurchasesPage() {
   const hideConfirm = () => setConfirmState(s=>({...s,open:false}))
 
   const fetchAll = async () => {
+    const cid = await getCompanyId()
     setLoading(true)
     const [{ data: purch },{ data: prods },{ data: sups },{ data: uomData }] = await Promise.all([
-      supabase.from('purchases').select('*, supplier:supplier_id(contact_name), items:purchase_items(id,product_id,qty,unit_price,product:product_id(name,unit))').order('created_at',{ascending:false}),
-      supabase.from('products').select('id,name,selling_price,base_cost,stock_qty,unit').eq('is_deleted',false).order('name'),
-      supabase.from('contacts').select('id,contact_name,current_balance').eq('contact_type',t.pur_col_supplier).order('contact_name'),
+      supabase.from('purchases').select('*, supplier:supplier_id(contact_name), items:purchase_items(id,product_id,qty,unit_price,product:product_id(name,unit))').eq('company_id', cid).order('created_at',{ascending:false}),
+      supabase.from('products').select('id,name,selling_price,base_cost,stock_qty,unit').eq('is_deleted',false).eq('company_id', cid).order('name'),
+      supabase.from('contacts').select('id,contact_name,current_balance').eq('contact_type',t.pur_col_supplier).eq('company_id', cid).order('contact_name'),
       supabase.from('uom').select('name').order('name'),
     ])
     setPurchases(purch||[])

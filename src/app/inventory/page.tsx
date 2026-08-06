@@ -1,8 +1,10 @@
 'use client'
+import { getCompanyId } from '@/lib/getCompanyId'
 import { useEffect, useState } from 'react'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 
 interface Product {
   id: string; name: string; sku: string; stock_qty: number
@@ -19,13 +21,16 @@ export default function InventoryPage() {
   const [qty, setQty] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
 
   const fetchProducts = async () => {
     setLoading(true)
-    const { data } = await supabase.from('products')
+    const cid = await getCompanyId()
+    let q = supabase.from('products')
       .select('id,name,sku,stock_qty,reorder_level,selling_price,base_cost')
       .eq('is_deleted', false).order('name')
+    if (cid) q = q.eq('company_id', cid)
+    const { data } = await q
     setProducts(data || [])
     setLoading(false)
   }

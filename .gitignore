@@ -137,3 +137,37 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# ===== Added 2026-08-06: Security + cleanup =====
+
+# Secrets — NEVER commit
+google-stt-key.json
+.env
+.env.*
+!.env.example
+
+# Backup snapshots (development artifacts)
+*.bak
+*.bak.*
+*.BACKUP_*
+*.tsx.bak*
+*.tsx.before-*
+*.tsx.final-backup
+*.py.bak*
+*.sh.bak*
+
+# One-off scripts / test files
+step*_*.sh
+test-burmese-numbers.ts
+write_settings.py
+
+# Editor auto-save files
+*.save
+*.save.[0-9]*
+*nano
+*.gitignore.backup
+
+# Terminal-mistake files (workaround)
+/h
+/can be applied immediately.
+/t login:*

@@ -1,11 +1,13 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getCompanyId } from '@/lib/getCompanyId'
+import { getDb } from '@/lib/db'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
 
 export default function SalesReturnPage() {
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const { t } = useI18n()
   const tAny = t as any
   const [returns, setReturns] = useState<any[]>([])
@@ -20,12 +22,13 @@ export default function SalesReturnPage() {
   const [txnLoading, setTxnLoading] = useState(false)
 
   const fetchAll = async () => {
+    const cid = await getCompanyId()
     setLoading(true)
     const [{ data: rets },{ data: custs },{ data: bks }] = await Promise.all([
       supabase.from('sales_returns')
         .select('*,customer:customer_id(contact_name),bank_account:bank_account_id(account_name)')
         .order('created_at',{ascending:false}),
-      supabase.from('contacts').select('id,contact_name').in('contact_type',['Customer','Both']).order('contact_name'),
+      supabase.from('contacts').select('id,contact_name').in('contact_type',['Customer','Both']).eq('company_id',cid).order('contact_name'),
       supabase.from('bank_accounts').select('id,account_name').eq('is_active',true).eq('is_deleted',false),
     ])
     setReturns(rets||[])

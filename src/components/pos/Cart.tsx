@@ -1,6 +1,7 @@
 'use client'
 import React, { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { useI18n } from '@/lib/i18n'
 
 export type CartItem = {
@@ -30,11 +31,24 @@ const Cart: React.FC<CartProps> = ({ items, onRemove, onUpdateQuantity, onChecko
   const [saving, setSaving] = useState(false)
   const [allowPriceEdit, setAllowPriceEdit] = useState(false)
   const [editingPrice, setEditingPrice] = useState<{[id: string]: string}>({})
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
 
   useEffect(() => {
-    supabase.from('companies').select('allow_price_edit').maybeSingle()
-      .then(({ data }) => { if (data?.allow_price_edit) setAllowPriceEdit(true) })
+    const fetchSettings = async () => {
+      let cid = ''
+      const ss = localStorage.getItem('staff_session')
+      if (ss) {
+        try { const sess = JSON.parse(ss); const { data: p } = await supabase.from('profiles').select('company_id').eq('id', sess.id).maybeSingle(); cid = p?.company_id || '' } catch {}
+      }
+      if (!cid) {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) { const { data: p } = await supabase.from('profiles').select('company_id').eq('auth_user_id', user.id).maybeSingle(); cid = p?.company_id || '' }
+      }
+      const q = supabase.from('companies').select('allow_price_edit')
+      const { data } = cid ? await q.eq('id', cid).maybeSingle() : await q.maybeSingle()
+      if (data?.allow_price_edit) setAllowPriceEdit(true)
+    }
+    fetchSettings()
   }, [])
 
   const loadCustomers = async () => {

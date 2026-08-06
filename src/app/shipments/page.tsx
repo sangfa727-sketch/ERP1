@@ -1,6 +1,8 @@
 'use client'
+import { getCompanyId } from '@/lib/getCompanyId'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
 import ConfirmModal from '@/components/ui/ConfirmModal'
@@ -34,7 +36,7 @@ const getCarrierLabels = (t: any) => ({
 })
 
 export default function ShipmentsPage() {
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const { t } = useI18n()
   const CARRIER_LABELS = getCarrierLabels(t)
   const STATUS_LABELS = getStatusLabels(t)
@@ -52,7 +54,9 @@ export default function ShipmentsPage() {
 
   const fetchAll = async () => {
     setLoading(true)
+    const cid = await getCompanyId()
     let q = supabase.from('shipments').select('*').order('shipment_date',{ascending:false})
+    if (cid) q = q.eq('company_id', cid)
     if (filterStatus) q = q.eq('status', filterStatus)
     const { data } = await q
     setShipments(data || [])

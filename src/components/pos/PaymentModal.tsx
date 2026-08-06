@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { toEnglishNumber } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 
 interface BankAccount { id: string; account_name: string; current_balance: number; account_type?: { icon: string } }
 interface Contact { id: string; contact_name: string; phone?: string }
@@ -27,7 +28,7 @@ type PayMode = 'cash' | 'credit' | 'split'
 
 export default function PaymentModal({ totalAmount, customerId: initCustomerId, customerName: initCustomerName, onClose, onConfirm }: PaymentModalProps) {
   const { t } = useI18n()
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const [mode, setMode] = useState<PayMode>('cash')
   const [cashAmount, setCashAmount] = useState<string>(totalAmount.toString())
   const [splitCash, setSplitCash] = useState<string>('')
@@ -49,16 +50,44 @@ export default function PaymentModal({ totalAmount, customerId: initCustomerId, 
   const [showCustPicker, setShowCustPicker] = useState(false)
 
   useEffect(() => {
-    supabase.from('bank_accounts')
-      .select('id,account_name,current_balance,account_type:account_type_id(icon)')
-      .eq('is_active', true).eq('is_deleted', false)
-      .then(({ data }) => { setBankAccounts((data as any) || []) })
+    // Get company_id then fetch bank accounts
+    const getComp = async () => {
+      let cid = ''
+      const ss = localStorage.getItem('staff_session')
+      if (ss) {
+        try { const sess = JSON.parse(ss); const { data: p } = await supabase.from('profiles').select('company_id').eq('id', sess.id).maybeSingle(); cid = p?.company_id || '' } catch {}
+      }
+      if (!cid) {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) { const { data: p } = await supabase.from('profiles').select('company_id').eq('auth_user_id', user.id).maybeSingle(); cid = p?.company_id || '' }
+      }
+      const q = supabase.from('bank_accounts').select('id,account_name,current_balance,account_type:account_type_id(icon)').eq('is_active', true).eq('is_deleted', false)
+      const { data } = cid ? await q.eq('company_id', cid) : await q
+      setBankAccounts((data as any) || [])
+    }
+    getComp()
 
-    supabase.from('contacts')
-      .select('id,contact_name,phone')
-      .in('contact_type', ['Customer','Both'])
-      .eq('is_deleted', false).order('contact_name')
-      .then(({ data }) => { setCustomers(data || []) })
+    const fetchCustomers = async () => {
+      let q = supabase.from('contacts')
+        .select('id,contact_name,phone')
+        .in('contact_type', ['Customer','Both'])
+        .eq('is_deleted', false).order('contact_name')
+      // company_id filter
+      let cid = ''
+      const ss = localStorage.getItem('staff_session')
+      if (ss) { try { const s = JSON.parse(ss); cid = s.company_id || '' } catch {} }
+      if (!cid) {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session?.user) {
+          const { data: p } = await supabase.from('profiles').select('company_id').eq('auth_user_id', session.user.id).maybeSingle()
+          cid = p?.company_id || ''
+        }
+      }
+      if (cid) q = q.eq('company_id', cid)
+      const { data } = await q
+      setCustomers(data || [])
+    }
+    fetchCustomers()
   }, [])
 
   const cashNum = Number(cashAmount || 0)

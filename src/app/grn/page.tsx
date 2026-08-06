@@ -1,6 +1,8 @@
 'use client'
+import { getCompanyId } from '@/lib/getCompanyId'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { toEnglishNumber } from '@/lib/utils'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
@@ -32,7 +34,7 @@ export default function GRNPage() {
   const [confirmState, setConfirmState] = useState<{open:boolean;msg:string;cb:()=>void}>({open:false,msg:'',cb:()=>{}})
   const showConfirm = (msg: string, cb: ()=>void) => setConfirmState({open:true,msg,cb})
   const hideConfirm = () => setConfirmState(s=>({...s,open:false}))
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
 
   const [supplierId, setSupplierId] = useState('')
   const [receivedDate, setReceivedDate] = useState(new Date().toISOString().split('T')[0])
@@ -42,11 +44,12 @@ export default function GRNPage() {
   const [lines, setLines] = useState<LineItem[]>([{ product_id:'', product_name:'', qty_received:'', unit_cost:'', batch_no:'', unit:'ခု', qty_damaged:'' }])
 
   const fetchAll = async () => {
+    const cid = await getCompanyId()
     setLoading(true)
     const [{ data: grnData }, { data: prods }, { data: sups }, { data: uomData }] = await Promise.all([
-      supabase.from('grn').select('*, supplier:supplier_id(contact_name), items:grn_items(id,qty_received,unit_cost,batch_no,product:product_id(name,unit))').order('received_date', { ascending: false }),
-      supabase.from('products').select('id,name,unit,base_cost,stock_qty').eq('is_deleted', false).order('name'),
-      supabase.from('contacts').select('id,contact_name').in('contact_type', ['Supplier','Both']).order('contact_name'),
+      supabase.from('grn').select('*, supplier:supplier_id(contact_name), items:grn_items(id,qty_received,unit_cost,batch_no,product:product_id(name,unit))').eq('company_id', cid).order('received_date', { ascending: false }),
+      supabase.from('products').select('id,name,unit,base_cost,stock_qty').eq('is_deleted', false).eq('company_id', cid).order('name'),
+      supabase.from('contacts').select('id,contact_name').in('contact_type', ['Supplier','Both']).eq('company_id', cid).order('contact_name'),
       supabase.from('uom').select('name').order('name'),
     ])
     setGrns((grnData as any) || [])

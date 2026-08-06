@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 import { I18nProvider } from '@/lib/i18n'
 import ThemeApplier from '@/components/ui/ThemeApplier'
+import ChatBubbleGate from '@/components/ai/ChatBubbleGate'
 
 export const metadata: Metadata = {
   title: 'Stillastock — Smart POS & ERP',
@@ -58,6 +59,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <I18nProvider>
           <ThemeApplier />
           {children}
+          <ChatBubbleGate />
         </I18nProvider>
       </body>
     </html>

@@ -31,6 +31,14 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     const saved = (localStorage.getItem('app_lang') as Lang) || 'my'
     setLangState(saved)
     applyLang(saved)
+    // Restore theme on page load
+    try {
+      const th = localStorage.getItem('app_theme')
+      if (th) {
+        const parsed = JSON.parse(th)
+        document.documentElement.setAttribute('data-theme', parsed.mode || 'light')
+      }
+    } catch {}
   }, [])
 
   const setLang = (l: Lang) => {

@@ -1,6 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getCompanyId } from '@/lib/getCompanyId'
+import { getDb } from '@/lib/db'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
 import ConfirmModal from '@/components/ui/ConfirmModal'
@@ -20,7 +22,7 @@ const ICON_OPTIONS = ['🏦','💵','💳','📱','🌊','🏧','💰','🏪']
 
 export default function BankAccountsPage() {
   const { t } = useI18n()
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const [accounts, setAccounts] = useState<BankAccount[]>([])
   const [types, setTypes] = useState<BankAccountType[]>([])
   const [loading, setLoading] = useState(true)
@@ -32,7 +34,7 @@ export default function BankAccountsPage() {
   const hideConfirm = () => setConfirmState(s=>({...s,open:false}))
 
   // Account Type modal
-  const [typeModal, setTypeModal] = useState<{open:boolean;data:any}>({open:false,data:EMPTY_TYPE})
+  const [typeModal, setTypeModal] = useState<{open:boolean;data:any}>({open:true,data:EMPTY_TYPE})
   const [typeSaving, setTypeSaving] = useState(false)
   const [typeMsg, setTypeMsg] = useState('')
   const [showTypes, setShowTypes] = useState(false)
@@ -40,7 +42,7 @@ export default function BankAccountsPage() {
   const fetchAll = async () => {
     setLoading(true)
     const [{ data: accs }, { data: tps }] = await Promise.all([
-      supabase.from('bank_accounts').select('*, account_type:account_type_id(id,name,icon)').eq('is_deleted', false).order('account_name'),
+      supabase.from('bank_accounts').select('*, account_type:account_type_id(id,name,icon)').eq('is_deleted', false).not('company_id', 'is', 'null').order('account_name'),
       supabase.from('bank_account_types').select('*').eq('is_active', true).order('name'),
     ])
     setAccounts((accs as any) || [])
@@ -61,19 +63,39 @@ export default function BankAccountsPage() {
     if (!d.account_name.trim()) { setMsg((t as any).bank_err_name); return }
     if (!d.account_type_id) { setMsg((t as any).bank_err_type); return }
     setSaving(true); setMsg('')
-    const { data: prof } = await supabase.from('profiles').select('company_id').maybeSingle()
+    // Get company_id
+    let companyId = null
+    const staffSession = localStorage.getItem('staff_session')
+    if (staffSession) {
+      try {
+        const sess = JSON.parse(staffSession)
+        const { data: prof } = await supabase.from('profiles').select('company_id').eq('id', sess.id).maybeSingle()
+        companyId = prof?.company_id
+      } catch {}
+    }
+    if (!companyId) {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: prof } = await supabase.from('profiles').select('company_id').eq('auth_user_id', user.id).maybeSingle()
+        companyId = prof?.company_id
+      }
+    }
+    if (!companyId) { setMsg('❌ Company ID မရပါ'); setSaving(false); return }
+
     if (modal.mode === 'add') {
       const ob = parseFloat(toEnglishNumber(d.opening_balance)) || 0
-      await supabase.from('bank_accounts').insert({
-        company_id: prof?.company_id, account_name: d.account_name,
+      const { error } = await supabase.from('bank_accounts').insert({
+        company_id: companyId, account_name: d.account_name,
         account_number: d.account_number || null, opening_balance: ob,
         current_balance: ob, account_type_id: d.account_type_id, is_active: d.is_active,
       })
+      if (error) { setMsg('❌ ' + error.message); setSaving(false); return }
     } else {
-      await supabase.from('bank_accounts').update({
+      const { error } = await supabase.from('bank_accounts').update({
         account_name: d.account_name, account_number: d.account_number || null,
         account_type_id: d.account_type_id, is_active: d.is_active,
       }).eq('id', d.id)
+      if (error) { setMsg('❌ ' + error.message); setSaving(false); return }
     }
     await fetchAll(); closeModal(); setSaving(false)
   }
@@ -90,14 +112,29 @@ export default function BankAccountsPage() {
     const d = typeModal.data
     if (!d.name.trim()) { setTypeMsg('❌ Name ဖြည့်ပါ'); return }
     setTypeSaving(true); setTypeMsg('')
-    const { data: prof } = await supabase.from('profiles').select('company_id').maybeSingle()
+    let companyId2 = null
+    const ss2 = localStorage.getItem('staff_session')
+    if (ss2) {
+      try {
+        const sess = JSON.parse(ss2)
+        const { data: p } = await supabase.from('profiles').select('company_id').eq('id', sess.id).maybeSingle()
+        companyId2 = p?.company_id
+      } catch {}
+    }
+    if (!companyId2) {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: p } = await supabase.from('profiles').select('company_id').eq('auth_user_id', user.id).maybeSingle()
+        companyId2 = p?.company_id
+      }
+    }
     if (d.id) {
       await supabase.from('bank_account_types').update({ name: d.name, icon: d.icon }).eq('id', d.id)
     } else {
-      await supabase.from('bank_account_types').insert({ company_id: prof?.company_id, name: d.name, icon: d.icon, is_active: true })
+      await supabase.from('bank_account_types').insert({ company_id: companyId2, name: d.name, icon: d.icon, is_active: true })
     }
     await fetchAll()
-    setTypeModal({ open: false, data: EMPTY_TYPE })
+    setTypeModal({ open: true, data: EMPTY_TYPE })
     setTypeSaving(false)
     setTypeMsg('')
   }
@@ -138,29 +175,80 @@ export default function BankAccountsPage() {
           <p className="text-sm text-gray-400 mt-1">{accounts.filter(a => a.is_active).length} {(t as any).bank_active}</p>
         </div>
 
-        {/* Account Types Panel */}
+        {/* Account Types Drawer */}
         {showTypes && (
-          <div className="bg-white rounded-2xl shadow-sm p-5 mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-bold text-gray-700">⚙️ Account Types</h2>
-              <button onClick={() => setTypeModal({ open: true, data: { ...EMPTY_TYPE } })}
-                className="px-3 py-1.5 bg-blue-600 text-white rounded-xl text-xs">+ Add Type</button>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-              {types.map(tp => (
-                <div key={tp.id} className="flex items-center justify-between p-3 border rounded-xl hover:bg-gray-50">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">{tp.icon}</span>
-                    <span className="text-sm font-medium">{tp.name}</span>
+          <div className="fixed inset-0 z-40 flex flex-col sm:flex-row">
+            <div className="flex-1 bg-black/30" onClick={() => setShowTypes(false)}/>
+            <div className="w-full sm:max-w-sm bg-white shadow-2xl flex flex-col sm:h-full max-h-[85vh] sm:max-h-full overflow-hidden rounded-t-2xl sm:rounded-none">
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b">
+                <h2 className="font-bold text-gray-800 text-base">⚙️ Account Types</h2>
+                <button onClick={() => setShowTypes(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+              </div>
+
+              {/* Type Form */}
+              <div className="px-5 py-4 border-b bg-gray-50">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                  {typeModal.data.id ? '✏️ Edit Type' : '➕ Add New Type'}
+                </p>
+                <div className="space-y-3">
+                  <input
+                    value={typeModal.data.name}
+                    onChange={e => setTypeModal(m => ({ ...m, data: { ...m.data, name: e.target.value } }))}
+                    className="w-full p-2 border rounded-xl text-sm"
+                    placeholder="e.g. Mobile Banking"/>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {ICON_OPTIONS.map(icon => (
+                      <button key={icon} onClick={() => setTypeModal(m => ({ ...m, data: { ...m.data, icon } }))}
+                        className={`w-9 h-9 rounded-xl text-lg flex items-center justify-center border-2 transition-all
+                          ${typeModal.data.icon === icon ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                        {icon}
+                      </button>
+                    ))}
                   </div>
-                  <div className="flex gap-1">
-                    <button onClick={() => setTypeModal({ open: true, data: { ...tp } })}
-                      className="px-2 py-1 bg-yellow-500 text-white rounded text-xs">✏️</button>
-                    <button onClick={() => deleteType(tp.id)}
-                      className="px-2 py-1 bg-red-500 text-white rounded text-xs">🗑️</button>
+                  {typeMsg && <p className="text-xs text-red-500">{typeMsg}</p>}
+                  <div className="flex gap-2">
+                    {typeModal.data.id && (
+                      <button onClick={() => setTypeModal({open:false, data:EMPTY_TYPE})}
+                        className="flex-1 py-2 border rounded-xl text-sm text-gray-600">
+                        Cancel
+                      </button>
+                    )}
+                    <button onClick={saveType} disabled={typeSaving}
+                      className="flex-1 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium disabled:opacity-50">
+                      {typeSaving ? 'Saving...' : typeModal.data.id ? '💾 Update' : '➕ Add'}
+                    </button>
                   </div>
                 </div>
-              ))}
+              </div>
+
+              {/* Types List */}
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                  Existing Types ({types.length})
+                </p>
+                <div className="space-y-2">
+                  {types.length === 0 && (
+                    <p className="text-center text-gray-400 text-sm py-8">No types yet</p>
+                  )}
+                  {types.map(tp => (
+                    <div key={tp.id}
+                      className={`flex items-center justify-between p-3 border rounded-xl transition-all
+                        ${typeModal.data.id === tp.id ? 'border-blue-400 bg-blue-50' : 'hover:bg-gray-50'}`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">{tp.icon}</span>
+                        <span className="text-sm font-medium text-gray-800">{tp.name}</span>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => setTypeModal({ open: true, data: { ...tp } })}
+                          className="px-2.5 py-1.5 bg-yellow-500 text-white rounded-lg text-xs font-medium">✏️</button>
+                        <button onClick={() => deleteType(tp.id)}
+                          className="px-2.5 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium">🗑️</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -204,8 +292,8 @@ export default function BankAccountsPage() {
 
       {/* Bank Account Modal */}
       {modal.open && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl p-6 w-full sm:max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-bold">{modal.mode === 'add' ? t.bank_modal_add : t.bank_modal_edit}</h2>
               <button onClick={closeModal} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
@@ -256,44 +344,7 @@ export default function BankAccountsPage() {
         </div>
       )}
 
-      {/* Account Type Modal */}
-      {typeModal.open && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="font-bold text-lg">{typeModal.data.id ? '✏️ Edit' : '➕ Add'} Account Type</h3>
-              <button onClick={() => setTypeModal({ open: false, data: EMPTY_TYPE })} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Name *</label>
-                <input value={typeModal.data.name} onChange={e => setTypeModal(m => ({ ...m, data: { ...m.data, name: e.target.value } }))}
-                  className="w-full p-2 border rounded-xl text-sm" placeholder="e.g. Mobile Banking"/>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-2 block">Icon</label>
-                <div className="flex gap-2 flex-wrap">
-                  {ICON_OPTIONS.map(icon => (
-                    <button key={icon} onClick={() => setTypeModal(m => ({ ...m, data: { ...m.data, icon } }))}
-                      className={`w-10 h-10 rounded-xl text-xl flex items-center justify-center border-2 transition-all
-                        ${typeModal.data.icon === icon ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                      {icon}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            {typeMsg && <p className="mt-3 text-sm text-red-500">{typeMsg}</p>}
-            <div className="flex gap-2 mt-5">
-              <button onClick={() => setTypeModal({ open: false, data: EMPTY_TYPE })} className="flex-1 py-2 border rounded-xl text-sm">Cancel</button>
-              <button onClick={saveType} disabled={typeSaving}
-                className="flex-1 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium disabled:opacity-50">
-                {typeSaving ? 'Saving...' : '💾 Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
 
       <ConfirmModal open={confirmState.open} message={confirmState.msg}
         onConfirm={() => { hideConfirm(); confirmState.cb() }} onCancel={hideConfirm}/>

@@ -1,6 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getCompanyId } from '@/lib/getCompanyId'
+import { getDb } from '@/lib/db'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
 import { toEnglishNumber } from '@/lib/utils'
@@ -24,7 +26,7 @@ interface APPayment {
 
 export default function APPage() {
   const { t } = useI18n()
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const [creditPurchases, setCreditPurchases] = useState<CreditPurchase[]>([])
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
   const [payments, setPayments] = useState<APPayment[]>([])
@@ -90,8 +92,7 @@ export default function APPage() {
     if (!amount || Number(amount) <= 0) { setMsg(t.ap_err_amount); return }
     setSaving(true); setMsg('')
 
-    const { data: profileData } = await supabase.from('profiles').select('company_id')
-    const companyId = profileData?.[0]?.company_id
+    const companyId = await getCompanyId()
     const payAmt = Number(amount)
     const maxAmt = Number(modal.purchase.items_total) - Number(modal.purchase.amount_paid)
     const actualAmt = Math.min(payAmt, maxAmt)
@@ -214,12 +215,12 @@ export default function APPage() {
                   <p className="text-sm text-red-600">{t.ap_debt_label}: <span className="font-bold">K {selectedSupplierData?.totalDebt.toLocaleString()}</span></p>
                 </div>
               </div>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm min-w-[600px]">
                 <thead className="bg-gray-50 border-b">
                   <tr>
                     <th className="text-left p-3 font-semibold text-gray-600">{t.col_date}</th>
                     <th className="text-left p-3 font-semibold text-gray-600">{t.ap_items}</th>
-                    <th className="text-right p-3 font-semibold text-gray-600">စုစုပေါင်း</th>
+                    <th className="text-right p-3 font-semibold text-gray-600">{t.col_total}</th>
                     <th className="text-right p-3 font-semibold text-gray-600">{t.ap_paid}</th>
                     <th className="text-right p-3 font-semibold text-gray-600">{t.ap_col_debt}</th>
                     <th className="text-center p-3 font-semibold text-gray-600">{t.col_action}</th>
@@ -262,6 +263,7 @@ export default function APPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
 
             {/* Payment History */}
@@ -269,7 +271,7 @@ export default function APPage() {
               <div className="p-4 border-b bg-gray-50">
                 <h2 className="font-bold text-gray-700">{t.ap_history}</h2>
               </div>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm min-w-[600px]">
                 <thead className="bg-gray-50 border-b">
                   <tr>
                     <th className="text-left p-3 font-semibold text-gray-600">{t.col_date}</th>
@@ -293,6 +295,7 @@ export default function APPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
         )}

@@ -9,6 +9,31 @@ const COMPANY_EMAIL_KEY = 'staff_company_email'
 const COMPANY_NAME_KEY = 'staff_company_name'
 
 export default function StaffLoginPage() {
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', 'light')
+    document.documentElement.style.colorScheme = 'light'
+    document.body.classList.add('auth-page')
+    document.body.style.backgroundColor = '#f8fafc'
+    document.body.style.color = '#0f172a'
+    return () => {
+      document.body.classList.remove('auth-page')
+    }
+  }, [])
+
+  useEffect(() => {
+    const staffSession = localStorage.getItem('staff_session')
+    if (staffSession) {
+      try {
+        const sess = JSON.parse(staffSession)
+        if (sess.expiresAt && Date.now() < sess.expiresAt) {
+          window.location.replace('/dashboard')
+          return
+        }
+      } catch {}
+      localStorage.removeItem('staff_session')
+      document.cookie = 'staff_session=; path=/; max-age=0'
+    }
+  }, [])
   const router = useRouter()
   const supabase = createClient()
   const { t } = useI18n()
@@ -53,12 +78,6 @@ export default function StaffLoginPage() {
   const handleEmailSubmit = async () => {
     if (!adminEmail.trim()) { setEmailError('Email ထည့်ပါ'); return }
     setEmailLoading(true); setEmailError('')
-    const { data } = await supabase
-      .from('profiles')
-      .select('company_id, companies:company_id(name, logo_url)')
-      .eq('role', 'Admin')
-      .maybeSingle()
-
     // Use RPC to find company by email
     const { data: compData } = await supabase.rpc('get_company_by_admin_email', {
       p_email: adminEmail.trim().toLowerCase()
@@ -106,7 +125,8 @@ export default function StaffLoginPage() {
     const secureToken = data.id + '-' + Date.now() + '-' + Math.random().toString(36).slice(2)
     const sessionData = JSON.stringify({
       id: data.id, name: data.name, role: data.role, role_id: data.role_id,
-      permissions: data.permissions, loginAt: Date.now(),
+      permissions: data.permissions, company_id: data.company_id, pin_verified: true,
+      loginAt: Date.now(),
       expiresAt: Date.now() + SESSION_HOURS * 60 * 60 * 1000,
     })
     localStorage.setItem('staff_session', sessionData)
@@ -266,7 +286,7 @@ export default function StaffLoginPage() {
       </div>
 
       <p className="mt-6 text-slate-400 text-xs">Session valid for {SESSION_HOURS} hours</p>
-      <a href="/login" className="mt-2 text-xs text-slate-400 hover:text-blue-600 transition-colors">
+      <a href="/login" onClick={(e:any)=>{e.preventDefault();window.location.replace("/login")}} className="mt-2 text-xs text-slate-400 hover:text-blue-600 transition-colors">
         Admin Login →
       </a>
     </div>

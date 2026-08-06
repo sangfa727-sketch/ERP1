@@ -1,8 +1,10 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { useI18n } from '@/lib/i18n'
 import BarcodeScanner from './BarcodeScanner'
+import { getCompanyId } from '@/lib/getCompanyId'
 
 interface Product {
   id: string; name: string; stock_qty: number
@@ -16,13 +18,18 @@ export default function ProductGrid({ onAddToCart }: { onAddToCart: (p: any) => 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showScanner, setShowScanner] = useState(false)
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
 
   useEffect(() => {
     const fetchProducts = async () => {
-      const { data, error } = await supabase
-        .from('products').select('id,name,stock_qty,selling_price,base_cost,sku')
+      const cid = await getCompanyId()
+      console.log('[ProductGrid] company_id:', cid)
+      let q = supabase.from('products')
+        .select('id,name,stock_qty,selling_price,base_cost,sku')
         .eq('is_deleted', false)
+      if (cid) q = q.eq('company_id', cid)
+      const { data, error } = await q
+      console.log('[ProductGrid] data count:', data?.length, 'error:', error?.message)
       if (error) setError(error.message)
       else setProducts(data || [])
       setLoading(false)
@@ -93,7 +100,7 @@ export default function ProductGrid({ onAddToCart }: { onAddToCart: (p: any) => 
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 overflow-y-auto flex-1">
+        <div className="grid gap-3 overflow-y-auto flex-1" style={{gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",alignContent:"start"}}>
           {filtered.map(product => (
             <button
               key={product.id}
@@ -103,9 +110,20 @@ export default function ProductGrid({ onAddToCart }: { onAddToCart: (p: any) => 
               style={{
                 backgroundColor: 'var(--color-card, #fff)',
                 border: '1px solid var(--color-border, #e5e7eb)',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                height: '120px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04)',
+                minHeight: '90px',
                 padding: '10px',
+                transition: 'box-shadow 0.15s, transform 0.15s',
+              }}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 8px 24px rgba(0,0,0,0.13), 0 2px 6px rgba(0,0,0,0.06)'
+                ;(e.currentTarget as HTMLElement).style.transform = 'translateY(-2px)'
+                ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--color-primary, #2563eb)'
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04)'
+                ;(e.currentTarget as HTMLElement).style.transform = 'translateY(0)'
+                ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--color-border, #e5e7eb)'
               }}>
               <p className="font-semibold text-xs leading-tight mb-1 flex-1"
                 style={{color: 'var(--color-text, #111827)', display: '-webkit-box', WebkitLineClamp: 2,

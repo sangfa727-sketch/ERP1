@@ -1,17 +1,21 @@
 'use client'
 import { useState, useCallback } from 'react'
-import { ToastContainer, toast } from 'react-toastify'
-import 'react-toastify/dist/ReactToastify.css'
 import AppLayout from '@/components/layout/AppLayout'
 import ProductGrid from '@/components/pos/ProductGrid'
 import Cart, { CartItem } from '@/components/pos/Cart'
 import PaymentModal from '@/components/pos/PaymentModal'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 
 export default function POSPage() {
   const [cartItems, setCartItems] = useState<CartItem[]>([])
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [selectedCustomerId, setSelectedCustomerId] = useState<string|undefined>()
+  const [notification, setNotification] = useState<{msg:string;type:'success'|'error'|'info'} | null>(null)
+  const showToast = (msg: string, type: 'success'|'error'|'info' = 'info') => {
+    setNotification({msg, type})
+    setTimeout(() => setNotification(null), 3000)
+  }
   const [selectedCustomerName, setSelectedCustomerName] = useState<string|undefined>()
   const [showMobileCart, setShowMobileCart] = useState(false)
 
@@ -39,7 +43,7 @@ export default function POSPage() {
   }
 
   const handleCheckout = (customerId?: string, customerName?: string) => {
-    if (cartItems.length === 0) { toast.error('Cart ထဲတွင် ကုန်ပစ္စည်း မရှိပါ'); return }
+    if (cartItems.length === 0) { showToast('Cart ထဲတွင် ကုန်ပစ္စည်း မရှိပါ', 'error'); return }
     setSelectedCustomerId(customerId)
     setSelectedCustomerName(customerName)
     setShowPaymentModal(true)
@@ -48,8 +52,20 @@ export default function POSPage() {
 
   const handleConfirmPayment = useCallback(async (paymentData: {
     paymentType: string; amountReceived: number; payments?: { method: string; amount: number }[]
+    customerId?: string; customerName?: string; bankAccountId?: string
   }) => {
-    const supabase = createClient()
+    // PaymentModal ကနေ customer ရွေးထားရင် override လုပ်မယ်
+    if (paymentData.customerId) {
+      setSelectedCustomerId(paymentData.customerId)
+      setSelectedCustomerName(paymentData.customerName)
+    }
+    const finalCustomerId = paymentData.customerId || selectedCustomerId
+    // Credit sale မှာ customer မဖြစ်မနေ လိုတယ်
+    if (paymentData.paymentType === 'credit' && !finalCustomerId) {
+      showToast('အကြွေးရောင်းရန် Customer ရွေးပါ', 'error')
+      return
+    }
+    const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
     const requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
     const itemsToSend = cartItems.map(item => ({
       product_id: item.id, qty: item.quantity, unit_price: item.selling_price
@@ -59,7 +75,7 @@ export default function POSPage() {
     const draft = {
       occurred_at: new Date().toISOString(),
       parties: {
-        customer_id: selectedCustomerId || '',
+        customer_id: finalCustomerId || '',
         staff_profile_id: '',
       },
       references: { external_ref: '' },
@@ -71,16 +87,23 @@ export default function POSPage() {
         product_id: i.product_id, qty: i.qty, unit_price: i.unit_price
       })),
     }
+    // Set company context for RLS in RPC
+    const { getCompanyId } = await import('@/lib/getCompanyId')
+    const posCompanyId = await getCompanyId()
+    if (posCompanyId) {
+      await supabase.rpc('set_staff_company', { p_company_id: posCompanyId })
+    }
+
     const { data: rpcResult, error } = await supabase.rpc('rpc_post_pos_sale_from_draft', {
       p_request_id: requestId, p_idempotency_key: requestId + '-pos', p_draft: draft
     })
     if (error) {
       if (error.message.includes('Stock out') || error.message.includes('stock')) {
-        toast.error('ကုန်ပစ္စည်း မလုံလောက်ပါ')
-      } else { toast.error('ငွေရှင်းမှု မအောင်မြင်ပါ: ' + error.message) }
+        showToast('ကုန်ပစ္စည်း မလုံလောက်ပါ', 'error')
+      } else { showToast('ငွေရှင်းမှု မအောင်မြင်ပါ: ' + error.message, 'error') }
       return
     }
-    const { data: companyInfo } = await supabase.from('companies').select('name,address,phone').eq('id', '38e7b287-fd4e-4354-a1d1-9efae0b09eb9').maybeSingle()
+    const { data: companyInfo } = await supabase.from('companies').select('name,address,phone').eq('id', posCompanyId).maybeSingle()
     localStorage.setItem('pos_last_receipt', JSON.stringify({
       transactionId: rpcResult?.transaction_id || requestId,
       items: cartItems.map(i => ({ name: i.name, quantity: i.quantity, unit_price: i.selling_price, subtotal: i.selling_price * i.quantity })),
@@ -96,7 +119,7 @@ export default function POSPage() {
     }))
     setCartItems([])
     setShowPaymentModal(false)
-    toast.success('ငွေရှင်းပြီးပါပြီ')
+    showToast('ငွေရှင်းပြီးပါပြီ ✅', 'success')
     window.open('/pos/receipt', '_blank')
   }, [cartItems, selectedCustomerId, selectedCustomerName])
 
@@ -106,7 +129,6 @@ export default function POSPage() {
   return (
     <AppLayout>
       <div className="flex flex-col md:flex-row min-h-screen">
-        <ToastContainer position="top-right" />
 
         {/* Desktop layout */}
         <div className="hidden md:block w-2/3 p-4 overflow-y-auto">
@@ -209,6 +231,22 @@ export default function POSPage() {
           />
         )}
       </div>
+      {/* Inline notification */}
+      {notification && (
+        <div style={{
+          position: 'fixed', top: '16px', left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, padding: '10px 20px', borderRadius: '12px',
+          fontSize: '14px', fontWeight: 500,
+          background: notification.type === 'success' ? '#16a34a' : notification.type === 'error' ? '#dc2626' : '#2563eb',
+          color: '#fff', boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+          display: 'flex', alignItems: 'center', gap: '8px',
+          animation: 'slideDown 0.2s ease',
+        }}>
+          {notification.type === 'success' ? '✅' : notification.type === 'error' ? '❌' : 'ℹ️'}
+          {notification.msg}
+        </div>
+      )}
+      <style>{`@keyframes slideDown{from{opacity:0;transform:translateX(-50%) translateY(-10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}`}</style>
     </AppLayout>
   )
 }

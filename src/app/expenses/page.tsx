@@ -1,6 +1,8 @@
 'use client'
+import { getCompanyId } from '@/lib/getCompanyId'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { toEnglishNumber } from '@/lib/utils'
 import AppLayout from '@/components/layout/AppLayout'
 import { useI18n } from '@/lib/i18n'
@@ -37,18 +39,21 @@ export default function ExpensesPage() {
   const [newCat, setNewCat] = useState('')
   const [showNewCat, setShowNewCat] = useState(false)
   const allCategories = [...CATEGORIES, ...customCats]
-  const supabase = createClient()
+  const supabase = createClient() // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS // TODO: use getDb for RLS
   const [confirmState, setConfirmState] = useState<{open:boolean;msg:string;cb:()=>void}>({open:false,msg:'',cb:()=>{}})
   const showConfirm = (msg: string, cb: ()=>void) => setConfirmState({open:true,msg,cb})
   const hideConfirm = () => setConfirmState(s=>({...s,open:false}))
 
   const fetchAll = async () => {
     setLoading(true)
+    const cid = await getCompanyId()
     const start = filterMonth + '-01'
     const end = filterMonth + '-31'
-    const { data } = await supabase.from('expenses')
-      .select('*').gte('expense_date', start).lte('expense_date', end)
+    let q = supabase.from('expenses').select('*')
+      .gte('expense_date', start).lte('expense_date', end)
       .order('expense_date', { ascending: false })
+    if (cid) q = q.eq('company_id', cid)
+    const { data } = await q
     setExpenses(data || [])
     setLoading(false)
   }
